@@ -110,10 +110,7 @@ class HealthCheckView(APIView):
     @extend_schema(
         tags=["Health"],
         summary="Service health check",
-        description=(
-            "Checks connectivity to PostgreSQL, Redis, and RabbitMQ. "
-            "Returns 200 when all dependencies are healthy, 503 when any are down."
-        ),
+        description=("Checks connectivity to PostgreSQL, Redis, and RabbitMQ. Returns 200 when all dependencies are healthy, 503 when any are down."),
         auth=[],
         responses={
             200: OpenApiResponse(
@@ -222,11 +219,7 @@ class CreateOrderView(APIView):
     @extend_schema(
         tags=["Orders"],
         summary="Create a payment order",
-        description=(
-            "Creates an order with 5% platform fee applied. "
-            "Submitting the same idempotency_key returns the existing order. "
-            "Optionally supply a promo_code for a discount."
-        ),
+        description=("Creates an order with 5% platform fee applied. Submitting the same idempotency_key returns the existing order. Optionally supply a promo_code for a discount."),
         request=_CREATE_ORDER_SER,
         responses={
             201: OpenApiResponse(description="Order created.", response=_ORDER_RESP_SER),
@@ -740,7 +733,7 @@ class SubscriptionCurrentView(APIView):
         if sub is None:
             return error_response(
                 code="ERR_PAYMENT_SUBSCRIPTION_NOT_FOUND",
-                message="No active subscription for this organisation.",
+                message="No active subscription for this organization.",
                 http_status=404,
                 request=request,
             )
@@ -809,9 +802,7 @@ class PromoCodeListCreateView(APIView):
     def get(self, request: Request) -> Response:
         """Return all promo codes."""
         promos = _LIST_PROMOS_UC(_PROMO_REPO()).execute()
-        return success_response(
-            PromoCodeResponseSerializer(promos, many=True).data, request=request
-        )
+        return success_response(PromoCodeResponseSerializer(promos, many=True).data, request=request)
 
     @extend_schema(
         tags=["Promo Codes"],
@@ -878,9 +869,7 @@ class DisputeListCreateView(APIView):
             order_id=order_id,
             user_id=_UUID(str(request.user.id)),
         )
-        return success_response(
-            DisputeResponseSerializer(disputes, many=True).data, request=request
-        )
+        return success_response(DisputeResponseSerializer(disputes, many=True).data, request=request)
 
     @extend_schema(
         tags=["Disputes"],
@@ -932,9 +921,7 @@ class DisputeDetailView(APIView):
                 resolution_notes=d.get("resolution_notes", ""),
             )
         except DisputeNotFoundError as exc:
-            return error_response(
-                code=exc.code, message=str(exc), http_status=404, request=request
-            )
+            return error_response(code=exc.code, message=str(exc), http_status=404, request=request)
         return success_response(DisputeResponseSerializer(dispute).data, request=request)
 
 
@@ -951,6 +938,4 @@ class DisputeListAllView(APIView):
     def get(self, request: Request) -> Response:
         """Return every dispute across all orders, newest first."""
         disputes = _DISPUTE_REPO().list_all()
-        return success_response(
-            DisputeResponseSerializer(disputes, many=True).data, request=request
-        )
+        return success_response(DisputeResponseSerializer(disputes, many=True).data, request=request)

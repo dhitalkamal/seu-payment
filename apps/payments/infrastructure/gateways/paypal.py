@@ -71,28 +71,32 @@ class PayPalGateway(IPaymentGateway):
         # ! PayPal amount must be a string with exactly 2 decimal places
         amount_str = f"{amount:.2f}"
 
-        payload = json.dumps({
-            "intent": "CAPTURE",
-            "purchase_units": [{
-                "reference_id": order_id,
-                "description": description[:127],
-                "amount": {
-                    "currency_code": currency.upper(),
-                    "value": amount_str,
-                },
-            }],
-            "payment_source": {
-                "paypal": {
-                    "experience_context": {
-                        "return_url": return_url,
-                        "cancel_url": cancel_url,
-                        "brand_name": "Sansaar",
-                        "user_action": "PAY_NOW",
-                        "landing_page": "LOGIN",
+        payload = json.dumps(
+            {
+                "intent": "CAPTURE",
+                "purchase_units": [
+                    {
+                        "reference_id": order_id,
+                        "description": description[:127],
+                        "amount": {
+                            "currency_code": currency.upper(),
+                            "value": amount_str,
+                        },
                     }
-                }
-            },
-        }).encode("utf-8")
+                ],
+                "payment_source": {
+                    "paypal": {
+                        "experience_context": {
+                            "return_url": return_url,
+                            "cancel_url": cancel_url,
+                            "brand_name": "Sansaar",
+                            "user_action": "PAY_NOW",
+                            "landing_page": "LOGIN",
+                        }
+                    }
+                },
+            }
+        ).encode("utf-8")
 
         req = Request(
             f"{base_url}/v2/checkout/orders",

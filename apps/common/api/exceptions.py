@@ -1,4 +1,5 @@
 """Exception handler and base domain error class."""
+
 from __future__ import annotations
 
 import uuid

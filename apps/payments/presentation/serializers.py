@@ -26,9 +26,7 @@ class RequestRefundSerializer(serializers.Serializer):
     """Payload for requesting a refund on a completed order."""
 
     order_id = serializers.UUIDField()
-    amount = serializers.DecimalField(
-        max_digits=12, decimal_places=2, required=False, allow_null=True, default=None
-    )
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True, default=None)
     reason = serializers.CharField()
 
 
@@ -113,9 +111,7 @@ class PromoCodeResponseSerializer(serializers.Serializer):
 class CreateDisputeSerializer(serializers.Serializer):
     """Payload for opening a dispute against a completed order."""
 
-    reason = serializers.ChoiceField(
-        choices=["duplicate", "fraudulent", "not_received", "subscription_cancelled", "other"]
-    )
+    reason = serializers.ChoiceField(choices=["duplicate", "fraudulent", "not_received", "subscription_cancelled", "other"])
     description = serializers.CharField(max_length=2000)
     evidence = serializers.DictField(required=False, default=dict)
 
@@ -123,9 +119,7 @@ class CreateDisputeSerializer(serializers.Serializer):
 class UpdateDisputeStatusSerializer(serializers.Serializer):
     """Payload for advancing a dispute's lifecycle status (admin only)."""
 
-    status = serializers.ChoiceField(
-        choices=["open", "under_review", "resolved", "closed"]
-    )
+    status = serializers.ChoiceField(choices=["open", "under_review", "resolved", "closed"])
     resolution_notes = serializers.CharField(max_length=2000, required=False, default="")
 
 

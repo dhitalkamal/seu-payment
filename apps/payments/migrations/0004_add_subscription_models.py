@@ -35,8 +35,8 @@ class Migration(migrations.Migration):
             options={
                 "db_table": '"payments"."subscription"',
                 "indexes": [
-                    models.Index(fields=["org_id", "-created_at"], name="payments_su_org_id_idx"),
-                    models.Index(fields=["gateway_subscription_id"], name="payments_su_gw_sub_idx"),
+                    models.Index(fields=["org_id", "-created_at"], name="sub_org_id_idx"),
+                    models.Index(fields=["gateway_subscription_id"], name="sub_gw_sub_idx"),
                 ],
             },
         ),
@@ -56,7 +56,7 @@ class Migration(migrations.Migration):
             options={
                 "db_table": '"payments"."subscription_payment"',
                 "indexes": [
-                    models.Index(fields=["subscription", "-paid_at"], name="payments_sp_sub_paid_idx"),
+                    models.Index(fields=["subscription", "-paid_at"], name="sp_sub_paid_idx"),
                 ],
             },
         ),

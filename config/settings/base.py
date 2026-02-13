@@ -118,8 +118,40 @@ CACHES = {
     }
 }
 
+# * celery
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TASK_DEFAULT_QUEUE = "payment"
+
+# * Khalti
+KHALTI_SECRET_KEY = config("KHALTI_SECRET_KEY", default="")
 KHALTI_WEBHOOK_SECRET = config("KHALTI_WEBHOOK_SECRET", default="")
+KHALTI_SANDBOX = config("KHALTI_SANDBOX", default=True, cast=bool)
+KHALTI_WEBSITE_URL = config("KHALTI_WEBSITE_URL", default="https://dev.khalti.com")
+
+# * eSewa
+ESEWA_PRODUCT_CODE = config("ESEWA_PRODUCT_CODE", default="EPAYTEST")
+ESEWA_SECRET_KEY = config("ESEWA_SECRET_KEY", default="")
 ESEWA_WEBHOOK_SECRET = config("ESEWA_WEBHOOK_SECRET", default="")
+ESEWA_SANDBOX = config("ESEWA_SANDBOX", default=True, cast=bool)
+
+# * Stripe
+STRIPE_SECRET_KEY = config("STRIPE_SECRET_KEY", default="")
+STRIPE_WEBHOOK_SECRET = config("STRIPE_WEBHOOK_SECRET", default="")
+
+# * PayPal
+PAYPAL_CLIENT_ID = config("PAYPAL_CLIENT_ID", default="")
+PAYPAL_CLIENT_SECRET = config("PAYPAL_CLIENT_SECRET", default="")
+PAYPAL_SANDBOX = config("PAYPAL_SANDBOX", default=True, cast=bool)
+
+# * Frontend URL for building return/cancel URLs
+FRONTEND_WEB_URL = config("FRONTEND_WEB_URL", default="http://localhost:5173")
+
+# * public base url for payment callbacks - gateways redirect browsers here
+PAYMENT_CALLBACK_BASE_URL = config("PAYMENT_CALLBACK_BASE_URL", default="http://localhost/payment/api/v1")
 
 SPECTACULAR_SETTINGS = {
     "TITLE": f"{SERVICE_NAME} API",

@@ -218,9 +218,7 @@ class Dispute(models.Model):
         db_table = '"payments"."dispute"'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    order = models.ForeignKey(
-        PaymentOrder, on_delete=models.CASCADE, related_name="disputes"
-    )
+    order = models.ForeignKey(PaymentOrder, on_delete=models.CASCADE, related_name="disputes")
     user_id = models.UUIDField()
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
     reason = models.CharField(max_length=30, choices=Reason.choices, default=Reason.OTHER)
@@ -267,7 +265,7 @@ class Dispute(models.Model):
 
 
 class Subscription(models.Model):
-    """An organisation's subscription to a platform plan (recurring billing)."""
+    """An organization's subscription to a platform plan (recurring billing)."""
 
     class Status(models.TextChoices):
         ACTIVE = "active", "Active"
@@ -350,9 +348,7 @@ class SubscriptionPayment(models.Model):
         indexes = [models.Index(fields=["subscription", "-paid_at"])]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    subscription = models.ForeignKey(
-        Subscription, on_delete=models.CASCADE, related_name="payments"
-    )
+    subscription = models.ForeignKey(Subscription, on_delete=models.CASCADE, related_name="payments")
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     currency = models.CharField(max_length=10, default="NPR")
     status = models.CharField(max_length=20, choices=Status.choices)

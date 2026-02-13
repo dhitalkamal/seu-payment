@@ -40,9 +40,7 @@ class FakeSubscriptionRepository(ISubscriptionRepository):
     """Minimal in-memory subscription store for list_all tests."""
 
     def __init__(self, subs: list[SubscriptionEntity] | None = None) -> None:
-        self._store: dict[uuid.UUID, SubscriptionEntity] = {
-            s.id: s for s in (subs or [])
-        }
+        self._store: dict[uuid.UUID, SubscriptionEntity] = {s.id: s for s in (subs or [])}
 
     def create(self, entity: SubscriptionEntity) -> SubscriptionEntity:
         self._store[entity.id] = entity
