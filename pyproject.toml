@@ -16,6 +16,7 @@ dependencies = [
     "pika",
     "drf-spectacular",
     "celery[redis]>=5.4",
+    "stripe>=15.1.0",
 ]
 
 [dependency-groups]
@@ -52,6 +53,8 @@ exclude = ["migrations/"]
 module = [
     "apps.common.api.pagination",
     "apps.common.middleware.request_context",
+    "apps.payments.application.use_cases.create_connected_account",
+    "apps.payments.application.use_cases.create_payout",
     "apps.payments.infrastructure.models",
     "apps.payments.presentation.views",
     "apps.payments.tests.unit.test_order_processing",

@@ -14,8 +14,11 @@ from rest_framework.views import APIView
 
 from apps.common.api.responses import created_response, error_response, success_response
 from apps.common.health import check_database, check_rabbitmq, check_redis
+from apps.common.permissions import IsOrgAdmin, IsOrgOwner
+from apps.payments.application.use_cases.create_connected_account import CreateConnectedAccountUseCase
 from apps.payments.application.use_cases.create_dispute import CreateDisputeUseCase
 from apps.payments.application.use_cases.create_order import CreatePaymentOrderUseCase
+from apps.payments.application.use_cases.create_payout import CreatePayoutUseCase
 from apps.payments.application.use_cases.create_promo_code import CreatePromoCodeUseCase
 from apps.payments.application.use_cases.get_order import GetOrderUseCase
 from apps.payments.application.use_cases.list_disputes import ListDisputesUseCase
@@ -30,8 +33,10 @@ from apps.payments.domain.exceptions import DisputeNotFoundError, InvalidPromoCo
 from apps.payments.infrastructure.gateways import get_gateway
 from apps.payments.infrastructure.publisher import publish_event
 from apps.payments.infrastructure.repositories import (
+    DjangoConnectedAccountRepository,
     DjangoDisputeRepository,
     DjangoPaymentOrderRepository,
+    DjangoPayoutRepository,
     DjangoPromoCodeRepository,
     DjangoRefundRepository,
 )
@@ -794,6 +799,12 @@ class PromoCodeListCreateView(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    def get_permissions(self) -> list:
+        """GET is open to any authenticated user; POST requires org admin role."""
+        if self.request.method == "POST":
+            return [IsOrgAdmin()]
+        return [IsAuthenticated()]
+
     @extend_schema(
         tags=["Promo Codes"],
         summary="List promo codes",
@@ -856,7 +867,8 @@ class ValidatePromoCodeView(APIView):
 class DisputeListCreateView(APIView):
     """GET/POST /orders/{order_id}/disputes/ - list or open a dispute."""
 
-    permission_classes = [IsAuthenticated]
+    # * org admin required for both listing and creating disputes
+    permission_classes = [IsOrgAdmin]
 
     @extend_schema(
         tags=["Disputes"],
@@ -926,7 +938,7 @@ class DisputeDetailView(APIView):
 
 
 class DisputeListAllView(APIView):
-    """GET /disputes/ — list all disputes platform-wide (admin)."""
+    """GET /disputes/ - list all disputes platform-wide (admin)."""
 
     permission_classes = [IsAuthenticated]
 
@@ -939,3 +951,104 @@ class DisputeListAllView(APIView):
         """Return every dispute across all orders, newest first."""
         disputes = _DISPUTE_REPO().list_all()
         return success_response(DisputeResponseSerializer(disputes, many=True).data, request=request)
+
+
+class ConnectedAccountView(APIView):
+    """POST /connect/accounts/ - register a Stripe Connect account for an org."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Stripe Connect"],
+        summary="Register Stripe Connect account",
+        description="Creates a Stripe Express account for the org and returns an onboarding URL.",
+        responses={
+            201: OpenApiResponse(description="Account created."),
+            502: OpenApiResponse(description="Stripe error."),
+        },
+    )
+    def post(self, request: Request) -> Response:
+        """Create a Stripe Connect account and return the onboarding URL."""
+        from rest_framework import serializers as drf_serializers
+
+        from apps.payments.infrastructure.gateways.stripe_connect import StripeConnectGateway
+
+        class ConnectSerializer(drf_serializers.Serializer):
+            org_id = drf_serializers.UUIDField()
+            return_url = drf_serializers.URLField()
+            refresh_url = drf_serializers.URLField()
+
+        ser = ConnectSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+
+        entity = CreateConnectedAccountUseCase(DjangoConnectedAccountRepository(), StripeConnectGateway()).execute(
+            org_id=d["org_id"],
+            return_url=d["return_url"],
+            refresh_url=d["refresh_url"],
+        )
+        return created_response(
+            {
+                "id": str(entity.id),
+                "org_id": str(entity.org_id),
+                "stripe_account_id": entity.stripe_account_id,
+                "onboarding_url": entity.onboarding_url,
+            },
+            request=request,
+        )
+
+
+class PayoutCreateView(APIView):
+    """POST /connect/payouts/ - transfer proceeds to a connected Stripe account."""
+
+    # * only org owners can trigger payouts
+    permission_classes = [IsOrgOwner]
+
+    @extend_schema(
+        tags=["Stripe Connect"],
+        summary="Create payout",
+        description="Transfer funds to the org's connected Stripe account.",
+        responses={
+            201: OpenApiResponse(description="Payout created."),
+            404: OpenApiResponse(description="No connected account found."),
+            502: OpenApiResponse(description="Stripe transfer failed."),
+        },
+    )
+    def post(self, request: Request) -> Response:
+        """Validate payload and trigger the Stripe transfer."""
+        from decimal import Decimal
+
+        from rest_framework import serializers as drf_serializers
+
+        from apps.payments.infrastructure.gateways.stripe_connect import StripeConnectGateway
+
+        class PayoutSerializer(drf_serializers.Serializer):
+            org_id = drf_serializers.UUIDField()
+            amount = drf_serializers.DecimalField(max_digits=12, decimal_places=2)
+            currency = drf_serializers.CharField(max_length=10, default="USD")
+            description = drf_serializers.CharField(max_length=500, default="")
+
+        ser = PayoutSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+
+        entity = CreatePayoutUseCase(
+            DjangoConnectedAccountRepository(),
+            DjangoPayoutRepository(),
+            StripeConnectGateway(),
+        ).execute(
+            org_id=d["org_id"],
+            amount=Decimal(str(d["amount"])),
+            currency=d["currency"],
+            description=d["description"],
+        )
+        return created_response(
+            {
+                "id": str(entity.id),
+                "org_id": str(entity.org_id),
+                "stripe_transfer_id": entity.stripe_transfer_id,
+                "amount": str(entity.amount),
+                "currency": entity.currency,
+            },
+            request=request,
+        )
