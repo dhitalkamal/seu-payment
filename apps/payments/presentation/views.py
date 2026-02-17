@@ -14,7 +14,7 @@ from rest_framework.views import APIView
 
 from apps.common.api.responses import created_response, error_response, success_response
 from apps.common.health import check_database, check_rabbitmq, check_redis
-from apps.common.permissions import IsOrgAdmin, IsOrgOwner
+from apps.common.permissions import IsOrgAdmin, IsOrgOwner, IsSuperAdminFromAllowedIP
 from apps.payments.application.use_cases.create_connected_account import CreateConnectedAccountUseCase
 from apps.payments.application.use_cases.create_dispute import CreateDisputeUseCase
 from apps.payments.application.use_cases.create_order import CreatePaymentOrderUseCase
@@ -653,13 +653,19 @@ class SubscriptionCreateView(APIView):
     @extend_schema(
         tags=["Subscriptions"],
         summary="List all subscriptions",
+        description="Returns all subscriptions. Optionally filter by org_id query parameter.",
         responses={200: OpenApiResponse(description="All subscriptions.", response=SubscriptionResponseSerializer(many=True))},
     )
     def get(self, request: Request) -> Response:
-        """Return every subscription across all orgs, newest first."""
+        """Return subscriptions filtered by org_id if provided, otherwise all."""
         from apps.payments.infrastructure.repositories import DjangoSubscriptionRepository
 
-        subs = DjangoSubscriptionRepository().list_all()
+        repo = DjangoSubscriptionRepository()
+        org_id_param = request.query_params.get("org_id", "")
+        if org_id_param:
+            subs = repo.list_by_org(_UUID(org_id_param))
+        else:
+            subs = repo.list_all()
         return success_response(SubscriptionResponseSerializer(subs, many=True).data, request=request)
 
     @extend_schema(
@@ -951,6 +957,27 @@ class DisputeListAllView(APIView):
         """Return every dispute across all orders, newest first."""
         disputes = _DISPUTE_REPO().list_all()
         return success_response(DisputeResponseSerializer(disputes, many=True).data, request=request)
+
+
+class AdminOrderListView(APIView):
+    """GET /admin/orders/ - list all platform orders (superadmin only)."""
+
+    permission_classes = [IsSuperAdminFromAllowedIP]
+
+    @extend_schema(
+        tags=["Admin"],
+        summary="List all orders (admin)",
+        description="Returns every payment order across all users, newest first. Requires superadmin access.",
+        responses={
+            200: OpenApiResponse(description="All platform orders.", response=_ORDER_RESP_SER(many=True)),
+            401: OpenApiResponse(description="Missing or invalid JWT."),
+            403: OpenApiResponse(description="Not a superadmin or IP not allowed."),
+        },
+    )
+    def get(self, request: Request) -> Response:
+        """Return every order across all users, not scoped to the requester."""
+        results = _ORDER_REPO().list_all()
+        return success_response(_ORDER_RESP_SER(results, many=True).data, request=request)
 
 
 class ConnectedAccountView(APIView):

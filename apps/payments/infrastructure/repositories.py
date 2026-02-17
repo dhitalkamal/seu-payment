@@ -94,6 +94,10 @@ class DjangoPaymentOrderRepository(IPaymentOrderRepository):
         """Return all orders for this user ordered newest first."""
         return [obj.to_entity() for obj in PaymentOrder.objects.filter(user_id=user_id).order_by("-created_at")]
 
+    def list_all(self) -> list[PaymentOrderEntity]:
+        """Return every order across all users, newest first."""
+        return [obj.to_entity() for obj in PaymentOrder.objects.all().order_by("-created_at")]
+
 
 class DjangoRefundRepository(IRefundRepository):
     """Persists Refund entities using the Django ORM."""

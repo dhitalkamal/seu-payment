@@ -128,6 +128,10 @@ class FakePaymentOrderRepository(IPaymentOrderRepository):
             None,
         )
 
+    def list_all(self) -> list[PaymentOrderEntity]:
+        """Return every stored order regardless of user."""
+        return list(self._store.values())
+
 
 class FakeRefundRepository(IRefundRepository):
     """In-memory refund store."""

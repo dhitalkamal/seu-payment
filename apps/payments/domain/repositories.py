@@ -42,6 +42,11 @@ class IPaymentOrderRepository(ABC):
     @abstractmethod
     def get_by_gateway_order_id(self, gateway_order_id: str) -> PaymentOrderEntity | None: ...
 
+    @abstractmethod
+    def list_all(self) -> list[PaymentOrderEntity]:
+        """Return every order across all users, admin only."""
+        ...
+
 
 class IRefundRepository(ABC):
     """Persistence contract for Refund records."""
@@ -83,7 +88,7 @@ class IDisputeRepository(ABC):
 
     @abstractmethod
     def list_all(self) -> list[DisputeEntity]:
-        """Return every dispute across all orders — admin only."""
+        """Return every dispute across all orders, admin only."""
         ...
 
 

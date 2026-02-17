@@ -5,6 +5,7 @@ from __future__ import annotations
 from django.urls import URLPattern, path
 
 from .views import (
+    AdminOrderListView,
     CreateOrderView,
     DisputeDetailView,
     DisputeListAllView,
@@ -55,6 +56,7 @@ urlpatterns: list[URLPattern] = [
         SubscriptionPaymentHistoryView.as_view(),
         name="subscription-payments",
     ),
+    path("admin/orders/", AdminOrderListView.as_view(), name="admin-orders"),
     path("promo-codes/", PromoCodeListCreateView.as_view(), name="promo-code-list-create"),
     path(
         "promo-codes/<str:code>/validate/",
