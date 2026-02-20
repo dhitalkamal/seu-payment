@@ -1,4 +1,4 @@
-"""Abstract payment gateway interface — all four providers implement this."""
+"""Abstract payment gateway interface; all four providers implement this."""
 
 from __future__ import annotations
 
@@ -47,6 +47,18 @@ class IPaymentGateway(ABC):
         @param return_url - URL the provider redirects to after success
         @param cancel_url - URL the provider redirects to after cancellation/failure
         @returns PaymentSession with gateway_order_id and payment_url
+        @raises PaymentGatewayError on network or API failures
+        """
+        ...
+
+    @abstractmethod
+    def refund(self, *, gateway_order_id: str, amount: Decimal) -> str:
+        """
+        Issue a refund for a previously completed payment.
+
+        @param gateway_order_id - the provider's own ID for the original payment
+        @param amount - amount to refund in the original currency
+        @returns the provider's refund ID for audit purposes
         @raises PaymentGatewayError on network or API failures
         """
         ...

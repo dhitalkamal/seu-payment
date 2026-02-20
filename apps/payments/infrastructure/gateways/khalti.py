@@ -12,6 +12,7 @@ from django.conf import settings
 
 from apps.payments.domain.exceptions import PaymentGatewayError
 from apps.payments.domain.gateway import IPaymentGateway, PaymentSession
+from apps.payments.infrastructure.gateways.retry import with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +24,9 @@ _LIVE_URL = "https://khalti.com/api/v2/epayment/initiate/"
 
 
 class KhaltiGateway(IPaymentGateway):
-    """Khalti V2 e-payment — initiates a hosted checkout and returns the payment URL."""
+    """Khalti V2 e-payment; initiates a hosted checkout and returns the payment URL."""
 
+    @with_retry(max_attempts=3, base_delay=1.0)
     def initiate(
         self,
         *,
@@ -45,7 +47,7 @@ class KhaltiGateway(IPaymentGateway):
         api_url = _SANDBOX_URL if getattr(settings, "KHALTI_SANDBOX", True) else _LIVE_URL
         secret = settings.KHALTI_SECRET_KEY
 
-        # ! amount must be integer paisa — Khalti rejects decimals
+        # ! amount must be integer paisa; Khalti rejects decimals
         amount_paisa = int(amount * _PAISA_MULTIPLIER)
 
         payload = json.dumps(
@@ -81,10 +83,14 @@ class KhaltiGateway(IPaymentGateway):
 
         if not pidx or not payment_url:
             logger.error("Khalti returned unexpected response: %s", body)
-            raise PaymentGatewayError("Khalti returned an invalid response — missing pidx or payment_url.")
+            raise PaymentGatewayError("Khalti returned an invalid response; missing pidx or payment_url.")
 
         return PaymentSession(
             gateway_order_id=pidx,
             payment_url=payment_url,
             raw_response=body,
         )
+
+    def refund(self, *, gateway_order_id: str, amount: Decimal) -> str:
+        """Khalti does not support programmatic refunds via API; raise to signal manual handling."""
+        raise PaymentGatewayError("Khalti does not support automated refunds; process manually in the Khalti dashboard.")

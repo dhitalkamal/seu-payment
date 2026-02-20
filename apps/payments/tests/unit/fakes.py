@@ -144,6 +144,11 @@ class FakeRefundRepository(IRefundRepository):
         self._store[entity.id] = entity
         return entity
 
+    def update(self, entity: RefundEntity) -> RefundEntity:
+        """Overwrite the stored entity and return it."""
+        self._store[entity.id] = entity
+        return entity
+
 
 class FakePromoCodeRepository(IPromoCodeRepository):
     """In-memory promo code store. Accepts a single entity, a list, or None."""

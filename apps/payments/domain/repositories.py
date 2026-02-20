@@ -54,6 +54,9 @@ class IRefundRepository(ABC):
     @abstractmethod
     def create(self, entity: RefundEntity) -> RefundEntity: ...
 
+    @abstractmethod
+    def update(self, entity: RefundEntity) -> RefundEntity: ...
+
 
 class IPromoCodeRepository(ABC):
     """Persistence contract for PromoCode lookups."""

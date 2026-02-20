@@ -13,6 +13,7 @@ from django.conf import settings
 
 from apps.payments.domain.exceptions import PaymentGatewayError
 from apps.payments.domain.gateway import IPaymentGateway, PaymentSession
+from apps.payments.infrastructure.gateways.retry import with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +42,9 @@ def _get_access_token(base_url: str, client_id: str, client_secret: str) -> str:
 
 
 class PayPalGateway(IPaymentGateway):
-    """PayPal Orders V2 — creates an order and returns the approval URL."""
+    """PayPal Orders V2; creates an order and returns the approval URL."""
 
+    @with_retry(max_attempts=3, base_delay=1.0)
     def initiate(
         self,
         *,
@@ -114,7 +116,7 @@ class PayPalGateway(IPaymentGateway):
                 body = json.loads(resp.read())
         except HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
-            logger.error("PayPal create order failed: %s — %s", exc, error_body)
+            logger.error("PayPal create order failed: %s -- %s", exc, error_body)
             raise PaymentGatewayError(f"PayPal order creation failed: {exc}") from exc
         except (URLError, TimeoutError) as exc:
             logger.error("PayPal unreachable: %s", exc)
@@ -131,7 +133,7 @@ class PayPalGateway(IPaymentGateway):
 
         if not paypal_order_id or not approval_url:
             logger.error("PayPal returned unexpected response: %s", body)
-            raise PaymentGatewayError("PayPal returned an invalid response — missing order ID or approval URL.")
+            raise PaymentGatewayError("PayPal returned an invalid response; missing order ID or approval URL.")
 
         return PaymentSession(
             gateway_order_id=paypal_order_id,
@@ -139,9 +141,13 @@ class PayPalGateway(IPaymentGateway):
             raw_response=body,
         )
 
+    def refund(self, *, gateway_order_id: str, amount: Decimal) -> str:
+        """PayPal does not support programmatic refunds via API in this integration; raise to signal manual handling."""
+        raise PaymentGatewayError("PayPal automated refunds are not yet implemented; process manually in the PayPal dashboard.")
+
 
 def capture_order(paypal_order_id: str) -> dict:
-    """Capture a previously approved PayPal order — called after user approves on PayPal.
+    """Capture a previously approved PayPal order; called after user approves on PayPal.
 
     @param paypal_order_id - the PayPal order ID from the approval callback
     @returns the full capture response from PayPal

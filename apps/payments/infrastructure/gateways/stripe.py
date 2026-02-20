@@ -12,15 +12,18 @@ from django.conf import settings
 
 from apps.payments.domain.exceptions import PaymentGatewayError
 from apps.payments.domain.gateway import IPaymentGateway, PaymentSession
+from apps.payments.infrastructure.gateways.retry import with_retry
 
 logger = logging.getLogger(__name__)
 
 _API_URL = "https://api.stripe.com/v1/checkout/sessions"
+_REFUNDS_URL = "https://api.stripe.com/v1/refunds"
 
 
 class StripeGateway(IPaymentGateway):
-    """Stripe Checkout — creates a hosted session and returns the payment URL."""
+    """Stripe Checkout; creates a hosted session and returns the payment URL."""
 
+    @with_retry(max_attempts=3, base_delay=1.0)
     def initiate(
         self,
         *,
@@ -42,12 +45,10 @@ class StripeGateway(IPaymentGateway):
         if not secret:
             raise PaymentGatewayError("STRIPE_SECRET_KEY is not configured.")
 
-        # ! Stripe expects amount in smallest currency unit — NPR has no subunit so 1:1,
+        # ! Stripe expects amount in smallest currency unit; NPR has no subunit so 1:1,
         # but USD/EUR need cents. We use paisa for NPR (100 paisa = 1 NPR).
         stripe_currency = currency.lower()
-        if stripe_currency == "npr":
-            amount_minor = int(amount * 100)
-        elif stripe_currency in ("usd", "eur", "gbp"):
+        if stripe_currency in ("npr", "usd", "eur", "gbp"):
             amount_minor = int(amount * 100)
         else:
             amount_minor = int(amount)
@@ -86,7 +87,7 @@ class StripeGateway(IPaymentGateway):
                 body = json.loads(resp.read())
         except HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
-            logger.error("Stripe create session failed: %s — %s", exc, error_body)
+            logger.error("Stripe create session failed: %s -- %s", exc, error_body)
             raise PaymentGatewayError(f"Stripe session creation failed: {exc}") from exc
         except (URLError, TimeoutError) as exc:
             logger.error("Stripe unreachable: %s", exc)
@@ -97,10 +98,74 @@ class StripeGateway(IPaymentGateway):
 
         if not session_id or not session_url:
             logger.error("Stripe returned unexpected response: %s", body)
-            raise PaymentGatewayError("Stripe returned an invalid response — missing id or url.")
+            raise PaymentGatewayError("Stripe returned an invalid response; missing id or url.")
 
         return PaymentSession(
             gateway_order_id=session_id,
             payment_url=session_url,
             raw_response=body,
         )
+
+    @with_retry(max_attempts=3, base_delay=1.0)
+    def refund(self, *, gateway_order_id: str, amount: Decimal) -> str:
+        """
+        Issue a refund against a Stripe Checkout Session.
+
+        Looks up the PaymentIntent from the session, then creates a refund.
+
+        @param gateway_order_id - the Stripe session ID (cs_...)
+        @param amount - amount to refund in the order's currency
+        @returns the Stripe refund ID (re_...)
+        @raises PaymentGatewayError on network or API failure
+        """
+        import urllib.parse
+
+        secret = settings.STRIPE_SECRET_KEY
+        if not secret:
+            raise PaymentGatewayError("STRIPE_SECRET_KEY is not configured.")
+
+        # * first retrieve the session to get the payment_intent ID
+        session_req = Request(
+            f"{_API_URL}/{gateway_order_id}",
+            headers={"Authorization": f"Bearer {secret}"},
+            method="GET",
+        )
+        try:
+            with urlopen(session_req, timeout=15) as resp:
+                session_body = json.loads(resp.read())
+        except (HTTPError, URLError, TimeoutError) as exc:
+            raise PaymentGatewayError(f"Stripe session lookup failed: {exc}") from exc
+
+        payment_intent = session_body.get("payment_intent", "")
+        if not payment_intent:
+            raise PaymentGatewayError("Stripe session has no payment_intent; cannot refund.")
+
+        amount_minor = int(amount * 100)
+        refund_params = urllib.parse.urlencode([("payment_intent", payment_intent), ("amount", str(amount_minor))]).encode("utf-8")
+
+        refund_req = Request(
+            _REFUNDS_URL,
+            data=refund_params,
+            headers={
+                "Authorization": f"Bearer {secret}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            method="POST",
+        )
+
+        try:
+            with urlopen(refund_req, timeout=15) as resp:
+                refund_body = json.loads(resp.read())
+        except HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+            logger.error("Stripe refund failed: %s -- %s", exc, error_body)
+            raise PaymentGatewayError(f"Stripe refund failed: {exc}") from exc
+        except (URLError, TimeoutError) as exc:
+            logger.error("Stripe refund unreachable: %s", exc)
+            raise PaymentGatewayError(f"Stripe refund unreachable: {exc}") from exc
+
+        refund_id = refund_body.get("id", "")
+        if not refund_id:
+            raise PaymentGatewayError("Stripe refund returned no ID.")
+
+        return refund_id

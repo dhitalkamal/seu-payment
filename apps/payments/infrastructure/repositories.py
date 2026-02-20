@@ -108,6 +108,14 @@ class DjangoRefundRepository(IRefundRepository):
         obj.save(using="default")
         return obj.to_entity()
 
+    def update(self, entity: RefundEntity) -> RefundEntity:
+        """Update status and gateway_refund_id fields on an existing refund record."""
+        Refund.objects.filter(id=entity.id).update(
+            status=entity.status,
+            gateway_refund_id=entity.gateway_refund_id,
+        )
+        return entity
+
 
 class DjangoPromoCodeRepository(IPromoCodeRepository):
     """Persists PromoCode lookups using the Django ORM."""

@@ -13,6 +13,7 @@ from django.conf import settings
 
 from apps.payments.domain.exceptions import PaymentGatewayError
 from apps.payments.domain.gateway import IPaymentGateway, PaymentSession
+from apps.payments.infrastructure.gateways.retry import with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +28,9 @@ def _sign(message: str, secret: str) -> str:
 
 
 class EsewaGateway(IPaymentGateway):
-    """eSewa V2 — builds a signed form payload. Client submits the form to eSewa's URL."""
+    """eSewa V2; builds a signed form payload. Client submits the form to eSewa's URL."""
 
+    @with_retry(max_attempts=3, base_delay=1.0)
     def initiate(
         self,
         *,
@@ -43,7 +45,7 @@ class EsewaGateway(IPaymentGateway):
         """
         Build signed eSewa form data. Client POSTs this form to eSewa to start payment.
 
-        eSewa uses a form-redirect model — the backend builds the signed payload,
+        eSewa uses a form-redirect model; the backend builds the signed payload,
         the frontend submits it as a form POST to eSewa's payment URL.
 
         @returns PaymentSession with transaction_uuid as gateway_order_id,
@@ -86,3 +88,7 @@ class EsewaGateway(IPaymentGateway):
             payment_url=form_url,
             raw_response={"form_data": form_data, "form_url": form_url},
         )
+
+    def refund(self, *, gateway_order_id: str, amount: Decimal) -> str:
+        """eSewa does not support programmatic refunds via API; raise to signal manual handling."""
+        raise PaymentGatewayError("eSewa does not support automated refunds; process manually in the eSewa merchant dashboard.")

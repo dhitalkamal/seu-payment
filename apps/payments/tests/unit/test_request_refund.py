@@ -9,6 +9,7 @@ import pytest
 
 from apps.payments.application.use_cases.request_refund import RequestRefundUseCase
 from apps.payments.domain.exceptions import OrderNotFoundError, RefundNotAllowedError
+from apps.payments.domain.gateway import IPaymentGateway, PaymentSession
 from apps.payments.tests.unit.fakes import (
     FakePaymentOrderRepository,
     FakeRefundRepository,
@@ -16,19 +17,30 @@ from apps.payments.tests.unit.fakes import (
 )
 
 
+class _FakeGateway(IPaymentGateway):
+    """Always succeeds; returns a fixed refund ID."""
+
+    def initiate(self, **kwargs: object) -> PaymentSession:
+        raise NotImplementedError
+
+    def refund(self, *, gateway_order_id: str, amount: Decimal) -> str:
+        return "re_test_ok"
+
+
 def _uc(orders=None) -> RequestRefundUseCase:
     return RequestRefundUseCase(
         order_repo=FakePaymentOrderRepository(orders or []),
         refund_repo=FakeRefundRepository(),
+        gateway=_FakeGateway(),
     )
 
 
-def test_refund_creates_pending_refund():
-    """Successful refund returns a RefundEntity with status=pending."""
+def test_refund_creates_completed_refund():
+    """Successful refund returns a RefundEntity with status=completed."""
     user_id = uuid.uuid4()
     order = make_order(user_id=user_id, status="completed")
     result = _uc(orders=[order]).execute(order_id=order.id, user_id=user_id, reason="Changed my mind")
-    assert result.status == "pending"
+    assert result.status == "completed"
     assert result.order_id == order.id
     assert result.amount == order.total_amount
 
@@ -38,7 +50,7 @@ def test_refund_sets_order_to_refunded():
     user_id = uuid.uuid4()
     order = make_order(user_id=user_id, status="completed")
     repo = FakePaymentOrderRepository([order])
-    RequestRefundUseCase(order_repo=repo, refund_repo=FakeRefundRepository()).execute(order_id=order.id, user_id=user_id, reason="Event cancelled")
+    RequestRefundUseCase(order_repo=repo, refund_repo=FakeRefundRepository(), gateway=_FakeGateway()).execute(order_id=order.id, user_id=user_id, reason="Event cancelled")
     updated = repo.get_by_id(order.id, user_id)
     assert updated.status == "refunded"
 
