@@ -30,6 +30,9 @@ class PaymentOrderEntity:
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None = None
+    # * stored on creation so notification-service can email the buyer on completion
+    customer_email: str = ""
+    customer_first_name: str = ""
 
 
 @dataclass(slots=True)

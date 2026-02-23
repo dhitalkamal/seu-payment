@@ -53,6 +53,9 @@ class PaymentOrder(models.Model):
     gateway_order_id = models.CharField(max_length=255, blank=True)
     idempotency_key = models.UUIDField(unique=True)
     completed_at = models.DateTimeField(null=True, blank=True)
+    # * stored so notification-service has the buyer's email when the webhook fires
+    customer_email = models.EmailField(blank=True, default="")
+    customer_first_name = models.CharField(max_length=150, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -77,6 +80,8 @@ class PaymentOrder(models.Model):
             created_at=self.created_at,
             updated_at=self.updated_at,
             completed_at=self.completed_at,
+            customer_email=self.customer_email or "",
+            customer_first_name=self.customer_first_name or "",
         )
 
     @classmethod
@@ -99,6 +104,8 @@ class PaymentOrder(models.Model):
             gateway_order_id=entity.gateway_order_id,
             idempotency_key=entity.idempotency_key,
             completed_at=entity.completed_at,
+            customer_email=entity.customer_email,
+            customer_first_name=entity.customer_first_name,
         )
 
 

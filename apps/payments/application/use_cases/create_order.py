@@ -11,7 +11,7 @@ from apps.payments.domain.exceptions import InvalidPromoCodeError, OrderAlreadyE
 from apps.payments.domain.gateway import IPaymentGateway, PaymentSession
 from apps.payments.domain.repositories import IPaymentOrderRepository, IPromoCodeRepository
 
-# ! platform fee varies by org plan — free=5%, starter=3%, pro=1%, ngo/enterprise=0%
+# ! platform fee varies by org plan: free=5%, starter=3%, pro=1%, ngo/enterprise=0%
 PLAN_FEE_RATES: dict[str, Decimal] = {
     "free": Decimal("0.05"),
     "starter": Decimal("0.03"),
@@ -47,6 +47,7 @@ class CreatePaymentOrderUseCase:
         idempotency_key: uuid.UUID,
         promo_code: str | None = None,
         customer_email: str = "",
+        customer_first_name: str = "",
         return_url: str = "",
         cancel_url: str = "",
         description: str = "Sansaar event registration",
@@ -62,12 +63,13 @@ class CreatePaymentOrderUseCase:
         @param gateway - khalti | esewa | stripe | paypal
         @param idempotency_key - re-submitting the same key returns the existing order
         @param promo_code - optional case-insensitive promo code
-        @param customer_email - buyer email from JWT (passed to gateway)
-        @param return_url - where the gateway redirects on success
-        @param cancel_url - where the gateway redirects on failure/cancel
-        @param description - label shown on the gateway payment page
-        @param org_plan - the organiser's plan (determines platform fee rate)
-        @returns tuple of (order, payment_session) — session is None for idempotent re-fetches
+        @param customer_email      - buyer email from JWT (passed to gateway and stored)
+        @param customer_first_name - buyer first name from JWT (stored for notification payloads)
+        @param return_url          - where the gateway redirects on success
+        @param cancel_url          - where the gateway redirects on failure/cancel
+        @param description         - label shown on the gateway payment page
+        @param org_plan            - the organiser's plan (determines platform fee rate)
+        @returns tuple of (order, payment_session); session is None for idempotent re-fetches
         @raises OrderAlreadyExistsError if another order exists for this registration
         @raises InvalidPromoCodeError if the promo is invalid
         @raises PaymentGatewayError if the gateway rejects or is unreachable
@@ -88,7 +90,7 @@ class CreatePaymentOrderUseCase:
             discount_amount = self._apply_promo(promo, subtotal)
             promo_id = promo.id
 
-        # ! look up fee rate by org plan — fallback to 5% for unknown plans
+        # ! look up fee rate by org plan, fallback to 5% for unknown plans
         fee_rate = PLAN_FEE_RATES.get(org_plan, PLATFORM_FEE_RATE)
         platform_fee = (subtotal * fee_rate).quantize(Decimal("0.01"))
         total_amount = subtotal - discount_amount + platform_fee
@@ -112,6 +114,8 @@ class CreatePaymentOrderUseCase:
             idempotency_key=idempotency_key,
             created_at=now,
             updated_at=now,
+            customer_email=customer_email,
+            customer_first_name=customer_first_name,
         )
         result = self._orders.create(order)
 

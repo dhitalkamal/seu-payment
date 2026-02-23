@@ -89,6 +89,21 @@ _TO_PROCESSING_UC = TransitionToProcessingUseCase
 _KHALTI_SER = KhaltiWebhookSerializer
 _ESEWA_SER = EsewaWebhookSerializer
 
+
+def _order_completed_payload(order: object) -> dict:
+    """Build the payment.order.completed event payload with all notification fields."""
+    return {
+        "order_id": str(order.id),
+        "registration_id": str(order.registration_id),
+        "user_id": str(order.user_id),
+        "event_id": str(order.event_id),
+        "email": order.customer_email,
+        "first_name": order.customer_first_name,
+        "amount": str(order.total_amount),
+        "gateway": order.gateway,
+    }
+
+
 _CHECKS = inline_serializer(
     name="DependencyChecks",
     fields={
@@ -241,6 +256,7 @@ class CreateOrderView(APIView):
 
         gateway_name = d["gateway"]
         email = request.user.token.get("email", "")
+        first_name = request.user.token.get("first_name", "")
 
         # * build return/cancel URLs - gateway redirects to our callback endpoint,
         # which processes the result and then redirects to the frontend
@@ -264,6 +280,7 @@ class CreateOrderView(APIView):
             idempotency_key=d["idempotency_key"],
             promo_code=d["promo_code"],
             customer_email=email,
+            customer_first_name=first_name,
             return_url=return_url,
             cancel_url=cancel_url,
             org_plan=d.get("org_plan", "free"),
@@ -375,12 +392,7 @@ class KhaltiWebhookView(APIView):
         if order.status == "completed":
             publish_event(
                 routing_key="payment.order.completed",
-                payload={
-                    "order_id": str(order.id),
-                    "registration_id": str(order.registration_id),
-                    "user_id": str(order.user_id),
-                    "event_id": str(order.event_id),
-                },
+                payload=_order_completed_payload(order),
             )
         return success_response({"received": True}, request=request)
 
@@ -423,12 +435,7 @@ class EsewaWebhookView(APIView):
         if order.status == "completed":
             publish_event(
                 routing_key="payment.order.completed",
-                payload={
-                    "order_id": str(order.id),
-                    "registration_id": str(order.registration_id),
-                    "user_id": str(order.user_id),
-                    "event_id": str(order.event_id),
-                },
+                payload=_order_completed_payload(order),
             )
         return success_response({"received": True}, request=request)
 
@@ -472,12 +479,7 @@ class StripeWebhookView(APIView):
             if order.status == "completed":
                 publish_event(
                     routing_key="payment.order.completed",
-                    payload={
-                        "order_id": str(order.id),
-                        "registration_id": str(order.registration_id),
-                        "user_id": str(order.user_id),
-                        "event_id": str(order.event_id),
-                    },
+                    payload=_order_completed_payload(order),
                 )
         elif event_type in ("checkout.session.expired", "checkout.session.async_payment_failed"):
             session_obj = event_data.get("data", {}).get("object", {})
@@ -537,12 +539,7 @@ class PayPalWebhookView(APIView):
         if order.status == "completed":
             publish_event(
                 routing_key="payment.order.completed",
-                payload={
-                    "order_id": str(order.id),
-                    "registration_id": str(order.registration_id),
-                    "user_id": str(order.user_id),
-                    "event_id": str(order.event_id),
-                },
+                payload=_order_completed_payload(order),
             )
         return success_response(
             {"captured": internal_status == "completed", "order_id": str(order.id)},
@@ -583,12 +580,7 @@ class PaymentCallbackView(APIView):
                     if order.status == "completed":
                         publish_event(
                             routing_key="payment.order.completed",
-                            payload={
-                                "order_id": str(order.id),
-                                "registration_id": str(order.registration_id),
-                                "user_id": str(order.user_id),
-                                "event_id": str(order.event_id),
-                            },
+                            payload=_order_completed_payload(order),
                         )
                     return HttpResponseRedirect(f"{base}/payment/success?order_id={order.id}")
                 except Exception:
@@ -615,12 +607,7 @@ class PaymentCallbackView(APIView):
                     if order.status == "completed":
                         publish_event(
                             routing_key="payment.order.completed",
-                            payload={
-                                "order_id": str(order.id),
-                                "registration_id": str(order.registration_id),
-                                "user_id": str(order.user_id),
-                                "event_id": str(order.event_id),
-                            },
+                            payload=_order_completed_payload(order),
                         )
                     return HttpResponseRedirect(f"{base}/payment/success?order_id={order.id}")
                 except Exception:
