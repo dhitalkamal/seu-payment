@@ -21,7 +21,7 @@ def verify_khalti_signature(payload_bytes: bytes, received_signature: str) -> bo
     """
     secret = getattr(settings, "KHALTI_WEBHOOK_SECRET", "")
     if not secret:
-        logger.warning("KHALTI_WEBHOOK_SECRET not set — skipping signature check (dev mode).")
+        logger.warning("KHALTI_WEBHOOK_SECRET not set; skipping signature check (dev mode).")
         return True
     expected = hmac.new(secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, received_signature)
@@ -36,7 +36,7 @@ def verify_esewa_signature(payload_bytes: bytes, received_signature: str) -> boo
     """
     secret = getattr(settings, "ESEWA_WEBHOOK_SECRET", "")
     if not secret:
-        logger.warning("ESEWA_WEBHOOK_SECRET not set — skipping signature check (dev mode).")
+        logger.warning("ESEWA_WEBHOOK_SECRET not set; skipping signature check (dev mode).")
         return True
     expected = hmac.new(secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, received_signature)
@@ -52,7 +52,10 @@ def verify_stripe_signature(payload_bytes: bytes, sig_header: str) -> bool:
     """
     secret = getattr(settings, "STRIPE_WEBHOOK_SECRET", "")
     if not secret:
-        logger.warning("STRIPE_WEBHOOK_SECRET not set — skipping signature check (dev mode).")
+        logger.warning("STRIPE_WEBHOOK_SECRET not set; skipping signature check (dev mode).")
+        return True
+    if secret == "whsec_CHANGE_ME_IN_PRODUCTION":
+        logger.warning("STRIPE_WEBHOOK_SECRET is still the placeholder value; set a real secret before deploying to production.")
         return True
 
     # * parse the Stripe-Signature header
@@ -67,7 +70,7 @@ def verify_stripe_signature(payload_bytes: bytes, sig_header: str) -> bool:
     # ! reject signatures older than 5 minutes to prevent replay attacks
     try:
         if abs(time.time() - int(timestamp)) > 300:
-            logger.warning("Stripe webhook timestamp too old — possible replay.")
+            logger.warning("Stripe webhook timestamp too old; possible replay.")
             return False
     except ValueError:
         return False
