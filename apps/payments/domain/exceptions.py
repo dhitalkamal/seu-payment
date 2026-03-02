@@ -59,3 +59,17 @@ class ActiveSubscriptionExistsError(DomainError):
 
     http_status = 409
     code = "ERR_PAYMENT_ACTIVE_SUBSCRIPTION_EXISTS"
+
+
+class ConnectedAccountNotFoundError(DomainError):
+    """No connected Stripe account exists for the given org."""
+
+    http_status = 404
+    code = "ERR_PAYMENT_CONNECTED_ACCOUNT_NOT_FOUND"
+
+
+class PayoutError(DomainError):
+    """The Stripe payout or transfer operation failed."""
+
+    http_status = 502
+    code = "ERR_PAYMENT_PAYOUT_ERROR"

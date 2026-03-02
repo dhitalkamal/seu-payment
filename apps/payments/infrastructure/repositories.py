@@ -7,30 +7,37 @@ import uuid
 from django.db import models as django_models
 
 from apps.payments.domain.entities import (
+    ConnectedAccountEntity,
     DisputeEntity,
     PaymentOrderEntity,
+    PayoutEntity,
     PromoCodeEntity,
     RefundEntity,
     SubscriptionEntity,
     SubscriptionPaymentEntity,
 )
 from apps.payments.domain.exceptions import (
+    ConnectedAccountNotFoundError,
     DisputeNotFoundError,
     InvalidPromoCodeError,
     OrderNotFoundError,
     SubscriptionNotFoundError,
 )
 from apps.payments.domain.repositories import (
+    IConnectedAccountRepository,
     IDisputeRepository,
     IPaymentOrderRepository,
+    IPayoutRepository,
     IPromoCodeRepository,
     IRefundRepository,
     ISubscriptionPaymentRepository,
     ISubscriptionRepository,
 )
 from apps.payments.infrastructure.models import (
+    ConnectedAccount,
     Dispute,
     PaymentOrder,
+    Payout,
     PromoCode,
     Refund,
     Subscription,
@@ -242,3 +249,41 @@ class DjangoSubscriptionPaymentRepository(ISubscriptionPaymentRepository):
     def list_by_subscription(self, sub_id: uuid.UUID) -> list[SubscriptionPaymentEntity]:
         """Return payment records for a subscription, newest first."""
         return [obj.to_entity() for obj in SubscriptionPayment.objects.filter(subscription_id=sub_id).order_by("-paid_at")]
+
+
+class DjangoConnectedAccountRepository(IConnectedAccountRepository):
+    """Persists ConnectedAccount entities using the Django ORM."""
+
+    def create(self, entity: ConnectedAccountEntity) -> ConnectedAccountEntity:
+        """Persist a new connected account and return the saved entity."""
+        obj = ConnectedAccount.from_entity(entity)
+        obj.save(using="default")
+        return obj.to_entity()
+
+    def get_by_org(self, org_id: uuid.UUID) -> ConnectedAccountEntity | None:
+        """Return the connected account for an org, or None if none exists."""
+        try:
+            return ConnectedAccount.objects.get(org_id=org_id).to_entity()
+        except ConnectedAccount.DoesNotExist:
+            return None
+
+    def get_by_id(self, account_id: uuid.UUID) -> ConnectedAccountEntity:
+        """Fetch by primary key. Raises ConnectedAccountNotFoundError if absent."""
+        try:
+            return ConnectedAccount.objects.get(id=account_id).to_entity()
+        except ConnectedAccount.DoesNotExist:
+            raise ConnectedAccountNotFoundError("Connected account not found.")
+
+
+class DjangoPayoutRepository(IPayoutRepository):
+    """Persists Payout entities using the Django ORM."""
+
+    def create(self, entity: PayoutEntity) -> PayoutEntity:
+        """Persist a new payout record and return the saved entity."""
+        obj = Payout.from_entity(entity)
+        obj.save(using="default")
+        return obj.to_entity()
+
+    def list_by_org(self, org_id: uuid.UUID) -> list[PayoutEntity]:
+        """Return all payouts for an org, newest first."""
+        return [obj.to_entity() for obj in Payout.objects.filter(org_id=org_id).order_by("-created_at")]

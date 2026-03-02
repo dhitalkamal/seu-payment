@@ -6,8 +6,10 @@ import uuid
 from abc import ABC, abstractmethod
 
 from apps.payments.domain.entities import (
+    ConnectedAccountEntity,
     DisputeEntity,
     PaymentOrderEntity,
+    PayoutEntity,
     PromoCodeEntity,
     RefundEntity,
     SubscriptionEntity,
@@ -128,3 +130,29 @@ class ISubscriptionPaymentRepository(ABC):
 
     @abstractmethod
     def list_by_subscription(self, sub_id: uuid.UUID) -> list[SubscriptionPaymentEntity]: ...
+
+
+# * ---- Stripe Connect repository interfaces ----
+
+
+class IConnectedAccountRepository(ABC):
+    """Persistence contract for ConnectedAccount records."""
+
+    @abstractmethod
+    def create(self, entity: ConnectedAccountEntity) -> ConnectedAccountEntity: ...
+
+    @abstractmethod
+    def get_by_org(self, org_id: uuid.UUID) -> ConnectedAccountEntity | None: ...
+
+    @abstractmethod
+    def get_by_id(self, account_id: uuid.UUID) -> ConnectedAccountEntity: ...
+
+
+class IPayoutRepository(ABC):
+    """Persistence contract for Payout records."""
+
+    @abstractmethod
+    def create(self, entity: PayoutEntity) -> PayoutEntity: ...
+
+    @abstractmethod
+    def list_by_org(self, org_id: uuid.UUID) -> list[PayoutEntity]: ...

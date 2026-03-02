@@ -8,8 +8,10 @@ from decimal import Decimal
 from django.db import models
 
 from apps.payments.domain.entities import (
+    ConnectedAccountEntity,
     DisputeEntity,
     PaymentOrderEntity,
+    PayoutEntity,
     PromoCodeEntity,
     RefundEntity,
     SubscriptionEntity,
@@ -391,4 +393,91 @@ class SubscriptionPayment(models.Model):
             period_start=entity.period_start,
             period_end=entity.period_end,
             paid_at=entity.paid_at,
+        )
+
+
+# * ---- Stripe Connect ORM models ----
+
+
+class ConnectedAccount(models.Model):
+    """A Stripe Express connected account belonging to an organiser org."""
+
+    class Meta:
+        db_table = '"payments"."connected_account"'
+        indexes = [
+            models.Index(fields=["org_id"], name="idx_connected_account_org"),
+        ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    org_id = models.UUIDField(unique=True)
+    stripe_account_id = models.CharField(max_length=255, unique=True)
+    onboarding_url = models.TextField()
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def to_entity(self) -> ConnectedAccountEntity:
+        """Map this ORM row to a pure-Python ConnectedAccountEntity."""
+        return ConnectedAccountEntity(
+            id=self.id,
+            org_id=self.org_id,
+            stripe_account_id=self.stripe_account_id,
+            onboarding_url=self.onboarding_url,
+            is_active=self.is_active,
+            created_at=self.created_at,
+        )
+
+    @classmethod
+    def from_entity(cls, entity: ConnectedAccountEntity) -> "ConnectedAccount":
+        """Build an unsaved ORM instance from a ConnectedAccountEntity."""
+        return cls(
+            id=entity.id,
+            org_id=entity.org_id,
+            stripe_account_id=entity.stripe_account_id,
+            onboarding_url=entity.onboarding_url,
+            is_active=entity.is_active,
+        )
+
+
+class Payout(models.Model):
+    """A fund transfer sent to an organiser's connected Stripe account."""
+
+    class Meta:
+        db_table = '"payments"."payout"'
+        indexes = [
+            models.Index(fields=["org_id", "-created_at"], name="idx_payout_org_created"),
+        ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    org_id = models.UUIDField()
+    stripe_account_id = models.CharField(max_length=255)
+    stripe_transfer_id = models.CharField(max_length=255, unique=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=10, default="USD")
+    description = models.CharField(max_length=500, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def to_entity(self) -> PayoutEntity:
+        """Map this ORM row to a pure-Python PayoutEntity."""
+        return PayoutEntity(
+            id=self.id,
+            org_id=self.org_id,
+            stripe_account_id=self.stripe_account_id,
+            stripe_transfer_id=self.stripe_transfer_id,
+            amount=self.amount,
+            currency=self.currency,
+            description=self.description,
+            created_at=self.created_at,
+        )
+
+    @classmethod
+    def from_entity(cls, entity: PayoutEntity) -> "Payout":
+        """Build an unsaved ORM instance from a PayoutEntity."""
+        return cls(
+            id=entity.id,
+            org_id=entity.org_id,
+            stripe_account_id=entity.stripe_account_id,
+            stripe_transfer_id=entity.stripe_transfer_id,
+            amount=entity.amount,
+            currency=entity.currency,
+            description=entity.description,
         )

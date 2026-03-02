@@ -116,3 +116,32 @@ class SubscriptionPaymentEntity:
     period_start: datetime
     period_end: datetime
     paid_at: datetime
+
+
+# * ---- Stripe Connect entities ----
+
+
+@dataclass(slots=True)
+class ConnectedAccountEntity:
+    """A Stripe Express connected account belonging to an organiser org."""
+
+    id: uuid.UUID
+    org_id: uuid.UUID
+    stripe_account_id: str
+    onboarding_url: str
+    is_active: bool
+    created_at: datetime
+
+
+@dataclass(slots=True)
+class PayoutEntity:
+    """A fund transfer sent to an organiser's connected Stripe account."""
+
+    id: uuid.UUID
+    org_id: uuid.UUID
+    stripe_account_id: str
+    stripe_transfer_id: str
+    amount: Decimal
+    currency: str
+    description: str
+    created_at: datetime
