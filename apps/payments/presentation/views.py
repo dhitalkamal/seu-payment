@@ -319,9 +319,19 @@ class RequestRefundView(APIView):
         ser.is_valid(raise_exception=True)
         d = ser.validated_data
 
+        from apps.payments.domain.exceptions import OrderNotFoundError
+        from apps.payments.infrastructure.gateways import get_gateway
+
+        order_repo = _ORDER_REPO()
+        try:
+            order = order_repo.get_by_id(d["order_id"], user_id=_UUID(str(request.user.id)))
+        except OrderNotFoundError:
+            return error_response(code="ERR_NOT_FOUND", message="Order not found.", http_status=404, request=request)
+        gateway = get_gateway(order.gateway)
         result = _REFUND_UC(
-            order_repo=_ORDER_REPO(),
+            order_repo=order_repo,
             refund_repo=_REFUND_REPO(),
+            gateway=gateway,
         ).execute(
             order_id=d["order_id"],
             user_id=_UUID(str(request.user.id)),
