@@ -15,6 +15,8 @@ from rest_framework.views import APIView
 from apps.common.api.responses import created_response, error_response, success_response
 from apps.common.health import check_database, check_rabbitmq, check_redis
 from apps.payments.application.use_cases.create_order import CreatePaymentOrderUseCase
+from apps.payments.application.use_cases.get_order import GetOrderUseCase
+from apps.payments.application.use_cases.list_my_orders import ListMyOrdersUseCase
 from apps.payments.application.use_cases.request_refund import RequestRefundUseCase
 from apps.payments.infrastructure.repositories import (
     DjangoPaymentOrderRepository,
@@ -32,6 +34,8 @@ _IS_AUTH = IsAuthenticated
 _CREATED = created_response
 _UUID = uuid.UUID
 _CREATE_ORDER_UC = CreatePaymentOrderUseCase
+_GET_ORDER_UC = GetOrderUseCase
+_LIST_ORDERS_UC = ListMyOrdersUseCase
 _REFUND_UC = RequestRefundUseCase
 _ORDER_REPO = DjangoPaymentOrderRepository
 _PROMO_REPO = DjangoPromoCodeRepository
@@ -230,3 +234,51 @@ class RequestRefundView(APIView):
             reason=d["reason"],
         )
         return _CREATED(_REFUND_RESP_SER(result).data, request=request)
+
+
+class OrderDetailView(APIView):
+    """Retrieve a single payment order owned by the authenticated user."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Orders"],
+        summary="Get order by id",
+        responses={
+            200: OpenApiResponse(description="Order found.", response=_ORDER_RESP_SER),
+            401: OpenApiResponse(description="Missing or invalid JWT."),
+            404: OpenApiResponse(description="Order not found."),
+        },
+    )
+    def get(self, request: Request, order_id: uuid.UUID) -> Response:
+        """Return the order if it exists and belongs to the authenticated user."""
+        result = _GET_ORDER_UC(_ORDER_REPO()).execute(
+            order_id=order_id,
+            user_id=_UUID(str(request.user.id)),
+        )
+        return success_response(_ORDER_RESP_SER(result).data, request=request)
+
+
+class OrderListView(APIView):
+    """List all payment orders belonging to the authenticated user."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Orders"],
+        summary="List my orders",
+        description="Returns all orders for the authenticated user, newest first.",
+        responses={
+            200: OpenApiResponse(
+                description="User orders.",
+                response=_ORDER_RESP_SER(many=True),
+            ),
+            401: OpenApiResponse(description="Missing or invalid JWT."),
+        },
+    )
+    def get(self, request: Request) -> Response:
+        """Return all orders owned by the authenticated user."""
+        results = _LIST_ORDERS_UC(_ORDER_REPO()).execute(
+            user_id=_UUID(str(request.user.id)),
+        )
+        return success_response(_ORDER_RESP_SER(results, many=True).data, request=request)

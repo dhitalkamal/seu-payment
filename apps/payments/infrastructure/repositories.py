@@ -52,6 +52,13 @@ class DjangoPaymentOrderRepository(IPaymentOrderRepository):
         obj.save()
         return obj.to_entity()
 
+    def list_by_user(self, user_id: object) -> list[PaymentOrderEntity]:
+        """Return all orders for this user ordered newest first."""
+        return [
+            obj.to_entity()
+            for obj in PaymentOrder.objects.filter(user_id=user_id).order_by("-created_at")
+        ]
+
 
 class DjangoRefundRepository(IRefundRepository):
     """Persists Refund entities using the Django ORM."""

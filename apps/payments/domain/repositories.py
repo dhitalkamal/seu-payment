@@ -26,6 +26,9 @@ class IPaymentOrderRepository(ABC):
     @abstractmethod
     def update(self, entity: PaymentOrderEntity) -> PaymentOrderEntity: ...
 
+    @abstractmethod
+    def list_by_user(self, user_id: uuid.UUID) -> list[PaymentOrderEntity]: ...
+
 
 class IRefundRepository(ABC):
     """Persistence contract for Refund records."""

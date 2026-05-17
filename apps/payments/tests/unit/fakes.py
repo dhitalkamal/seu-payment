@@ -100,6 +100,10 @@ class FakePaymentOrderRepository(IPaymentOrderRepository):
         self._store[entity.id] = entity
         return entity
 
+    def list_by_user(self, user_id: uuid.UUID) -> list[PaymentOrderEntity]:
+        """Return all orders owned by the given user."""
+        return [o for o in self._store.values() if o.user_id == user_id]
+
 
 class FakeRefundRepository(IRefundRepository):
     """In-memory refund store."""
