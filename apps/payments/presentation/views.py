@@ -24,6 +24,7 @@ from apps.payments.infrastructure.repositories import (
     DjangoRefundRepository,
 )
 from apps.payments.application.use_cases.process_webhook import ProcessWebhookUseCase
+from apps.payments.infrastructure.publisher import publish_event
 from apps.payments.presentation.serializers import (
     CreateOrderSerializer,
     EsewaWebhookSerializer,
@@ -305,11 +306,21 @@ class KhaltiWebhookView(APIView):
         khalti_to_internal = {"Completed": "completed", "Failed": "failed"}
         internal_status = khalti_to_internal.get(d["status"], "processing")
 
-        _WEBHOOK_UC(_ORDER_REPO()).execute(
+        order = _WEBHOOK_UC(_ORDER_REPO()).execute(
             gateway_order_id=d["pidx"],
             status=internal_status,
             gateway_transaction_id=d.get("transaction_id", ""),
         )
+        if order.status == "completed":
+            publish_event(
+                routing_key="payment.order.completed",
+                payload={
+                    "order_id": str(order.id),
+                    "registration_id": str(order.registration_id),
+                    "user_id": str(order.user_id),
+                    "event_id": str(order.event_id),
+                },
+            )
         return success_response({"received": True}, request=request)
 
 
@@ -335,11 +346,21 @@ class EsewaWebhookView(APIView):
         esewa_to_internal = {"COMPLETE": "completed", "FAILED": "failed"}
         internal_status = esewa_to_internal.get(d["status"], "processing")
 
-        _WEBHOOK_UC(_ORDER_REPO()).execute(
+        order = _WEBHOOK_UC(_ORDER_REPO()).execute(
             gateway_order_id=d["transaction_uuid"],
             status=internal_status,
             gateway_transaction_id=d.get("transaction_code", ""),
         )
+        if order.status == "completed":
+            publish_event(
+                routing_key="payment.order.completed",
+                payload={
+                    "order_id": str(order.id),
+                    "registration_id": str(order.registration_id),
+                    "user_id": str(order.user_id),
+                    "event_id": str(order.event_id),
+                },
+            )
         return success_response({"received": True}, request=request)
 
 
