@@ -104,6 +104,13 @@ class FakePaymentOrderRepository(IPaymentOrderRepository):
         """Return all orders owned by the given user."""
         return [o for o in self._store.values() if o.user_id == user_id]
 
+    def get_by_gateway_order_id(self, gateway_order_id: str) -> PaymentOrderEntity | None:
+        """Return the order with this gateway_order_id or None."""
+        return next(
+            (o for o in self._store.values() if o.gateway_order_id == gateway_order_id),
+            None,
+        )
+
 
 class FakeRefundRepository(IRefundRepository):
     """In-memory refund store."""

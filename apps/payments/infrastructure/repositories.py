@@ -52,6 +52,13 @@ class DjangoPaymentOrderRepository(IPaymentOrderRepository):
         obj.save()
         return obj.to_entity()
 
+    def get_by_gateway_order_id(self, gateway_order_id: str) -> PaymentOrderEntity | None:
+        """Return the order with this gateway_order_id or None."""
+        try:
+            return PaymentOrder.objects.get(gateway_order_id=gateway_order_id).to_entity()
+        except PaymentOrder.DoesNotExist:
+            return None
+
     def list_by_user(self, user_id: object) -> list[PaymentOrderEntity]:
         """Return all orders for this user ordered newest first."""
         return [

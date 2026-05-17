@@ -23,8 +23,11 @@ from apps.payments.infrastructure.repositories import (
     DjangoPromoCodeRepository,
     DjangoRefundRepository,
 )
+from apps.payments.application.use_cases.process_webhook import ProcessWebhookUseCase
 from apps.payments.presentation.serializers import (
     CreateOrderSerializer,
+    EsewaWebhookSerializer,
+    KhaltiWebhookSerializer,
     PaymentOrderResponseSerializer,
     RefundResponseSerializer,
     RequestRefundSerializer,
@@ -44,6 +47,9 @@ _CREATE_ORDER_SER = CreateOrderSerializer
 _ORDER_RESP_SER = PaymentOrderResponseSerializer
 _REFUND_RESP_SER = RefundResponseSerializer
 _REFUND_SER = RequestRefundSerializer
+_WEBHOOK_UC = ProcessWebhookUseCase
+_KHALTI_SER = KhaltiWebhookSerializer
+_ESEWA_SER = EsewaWebhookSerializer
 
 _CHECKS = inline_serializer(
     name="DependencyChecks",
@@ -275,5 +281,65 @@ class OrderDetailView(APIView):
             user_id=_UUID(str(request.user.id)),
         )
         return success_response(_ORDER_RESP_SER(result).data, request=request)
+
+
+class KhaltiWebhookView(APIView):
+    """Receive payment status callbacks from Khalti."""
+
+    authentication_classes: list = []
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        tags=["Webhooks"],
+        summary="Khalti payment webhook",
+        auth=[],
+        request=_KHALTI_SER,
+        responses={200: OpenApiResponse(description="Webhook processed.")},
+    )
+    def post(self, request: Request) -> Response:
+        """Process the Khalti callback and update the matching order."""
+        ser = _KHALTI_SER(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+
+        khalti_to_internal = {"Completed": "completed", "Failed": "failed"}
+        internal_status = khalti_to_internal.get(d["status"], "processing")
+
+        _WEBHOOK_UC(_ORDER_REPO()).execute(
+            gateway_order_id=d["pidx"],
+            status=internal_status,
+            gateway_transaction_id=d.get("transaction_id", ""),
+        )
+        return success_response({"received": True}, request=request)
+
+
+class EsewaWebhookView(APIView):
+    """Receive payment status callbacks from eSewa."""
+
+    authentication_classes: list = []
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        tags=["Webhooks"],
+        summary="eSewa payment webhook",
+        auth=[],
+        request=_ESEWA_SER,
+        responses={200: OpenApiResponse(description="Webhook processed.")},
+    )
+    def post(self, request: Request) -> Response:
+        """Process the eSewa callback and update the matching order."""
+        ser = _ESEWA_SER(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+
+        esewa_to_internal = {"COMPLETE": "completed", "FAILED": "failed"}
+        internal_status = esewa_to_internal.get(d["status"], "processing")
+
+        _WEBHOOK_UC(_ORDER_REPO()).execute(
+            gateway_order_id=d["transaction_uuid"],
+            status=internal_status,
+            gateway_transaction_id=d.get("transaction_code", ""),
+        )
+        return success_response({"received": True}, request=request)
 
 

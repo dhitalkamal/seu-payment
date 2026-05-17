@@ -59,3 +59,20 @@ class RefundResponseSerializer(serializers.Serializer):
     status = serializers.CharField()
     gateway_refund_id = serializers.CharField()
     created_at = serializers.DateTimeField()
+
+
+class KhaltiWebhookSerializer(serializers.Serializer):
+    """Khalti payment callback payload."""
+
+    pidx = serializers.CharField(help_text="Khalti payment index (gateway_order_id).")
+    transaction_id = serializers.CharField(required=False, default="")
+    status = serializers.ChoiceField(choices=["Completed", "Failed", "Pending", "Refunded"])
+
+
+class EsewaWebhookSerializer(serializers.Serializer):
+    """eSewa payment callback payload."""
+
+    product_code = serializers.CharField()
+    transaction_uuid = serializers.CharField(help_text="eSewa order ID (gateway_order_id).")
+    transaction_code = serializers.CharField(required=False, default="")
+    status = serializers.ChoiceField(choices=["COMPLETE", "FAILED", "PENDING", "AMBIGUOUS"])
