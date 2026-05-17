@@ -25,6 +25,10 @@ from apps.payments.infrastructure.repositories import (
 )
 from apps.payments.application.use_cases.process_to_processing import TransitionToProcessingUseCase
 from apps.payments.application.use_cases.process_webhook import ProcessWebhookUseCase
+from apps.payments.infrastructure.webhook_verify import (
+    verify_esewa_signature,
+    verify_khalti_signature,
+)
 from apps.payments.infrastructure.publisher import publish_event
 from apps.payments.presentation.serializers import (
     CreateOrderSerializer,
@@ -303,6 +307,14 @@ class KhaltiWebhookView(APIView):
     )
     def post(self, request: Request) -> Response:
         """Process the Khalti callback and update the matching order."""
+        sig = request.headers.get("X-Khalti-Signature", "")
+        if not verify_khalti_signature(request.body, sig):
+            return error_response(
+                code="ERR_PAYMENT_INVALID_SIGNATURE",
+                message="Webhook signature verification failed.",
+                http_status=400,
+                request=request,
+            )
         ser = _KHALTI_SER(data=request.data)
         ser.is_valid(raise_exception=True)
         d = ser.validated_data
@@ -343,6 +355,14 @@ class EsewaWebhookView(APIView):
     )
     def post(self, request: Request) -> Response:
         """Process the eSewa callback and update the matching order."""
+        sig = request.headers.get("X-Esewa-Signature", "")
+        if not verify_esewa_signature(request.body, sig):
+            return error_response(
+                code="ERR_PAYMENT_INVALID_SIGNATURE",
+                message="Webhook signature verification failed.",
+                http_status=400,
+                request=request,
+            )
         ser = _ESEWA_SER(data=request.data)
         ser.is_valid(raise_exception=True)
         d = ser.validated_data

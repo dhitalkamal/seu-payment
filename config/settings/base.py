@@ -118,6 +118,9 @@ CACHES = {
     }
 }
 
+KHALTI_WEBHOOK_SECRET = config("KHALTI_WEBHOOK_SECRET", default="")
+ESEWA_WEBHOOK_SECRET = config("ESEWA_WEBHOOK_SECRET", default="")
+
 SPECTACULAR_SETTINGS = {
     "TITLE": f"{SERVICE_NAME} API",
     "DESCRIPTION": "Payment processing service for the Sansaar platform.",
