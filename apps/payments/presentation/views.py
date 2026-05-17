@@ -23,6 +23,7 @@ from apps.payments.infrastructure.repositories import (
     DjangoPromoCodeRepository,
     DjangoRefundRepository,
 )
+from apps.payments.application.use_cases.process_to_processing import TransitionToProcessingUseCase
 from apps.payments.application.use_cases.process_webhook import ProcessWebhookUseCase
 from apps.payments.infrastructure.publisher import publish_event
 from apps.payments.presentation.serializers import (
@@ -49,6 +50,7 @@ _ORDER_RESP_SER = PaymentOrderResponseSerializer
 _REFUND_RESP_SER = RefundResponseSerializer
 _REFUND_SER = RequestRefundSerializer
 _WEBHOOK_UC = ProcessWebhookUseCase
+_TO_PROCESSING_UC = TransitionToProcessingUseCase
 _KHALTI_SER = KhaltiWebhookSerializer
 _ESEWA_SER = EsewaWebhookSerializer
 
@@ -223,6 +225,8 @@ class CreateOrderView(APIView):
             idempotency_key=d["idempotency_key"],
             promo_code=d["promo_code"],
         )
+        # transition to processing now that the client will be redirected to the gateway
+        result = _TO_PROCESSING_UC(_ORDER_REPO()).execute(order_id=result.id)
         return _CREATED(_ORDER_RESP_SER(result).data, request=request)
 
 

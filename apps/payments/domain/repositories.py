@@ -30,6 +30,9 @@ class IPaymentOrderRepository(ABC):
     def list_by_user(self, user_id: uuid.UUID) -> list[PaymentOrderEntity]: ...
 
     @abstractmethod
+    def get_by_order_id(self, order_id: uuid.UUID) -> PaymentOrderEntity: ...
+
+    @abstractmethod
     def get_by_gateway_order_id(self, gateway_order_id: str) -> PaymentOrderEntity | None: ...
 
 

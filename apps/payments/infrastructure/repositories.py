@@ -52,6 +52,14 @@ class DjangoPaymentOrderRepository(IPaymentOrderRepository):
         obj.save()
         return obj.to_entity()
 
+    def get_by_order_id(self, order_id: object) -> PaymentOrderEntity:
+        """Fetch by order ID without ownership check. Raises OrderNotFoundError if absent."""
+        try:
+            return PaymentOrder.objects.get(id=order_id).to_entity()
+        except PaymentOrder.DoesNotExist:
+            from apps.payments.domain.exceptions import OrderNotFoundError
+            raise OrderNotFoundError("Order not found.")
+
     def get_by_gateway_order_id(self, gateway_order_id: str) -> PaymentOrderEntity | None:
         """Return the order with this gateway_order_id or None."""
         try:

@@ -104,6 +104,13 @@ class FakePaymentOrderRepository(IPaymentOrderRepository):
         """Return all orders owned by the given user."""
         return [o for o in self._store.values() if o.user_id == user_id]
 
+    def get_by_order_id(self, order_id: uuid.UUID) -> PaymentOrderEntity:
+        """Return the order by its own ID. Raises OrderNotFoundError if absent."""
+        entity = self._store.get(order_id)
+        if entity is None:
+            raise OrderNotFoundError("Order not found.")
+        return entity
+
     def get_by_gateway_order_id(self, gateway_order_id: str) -> PaymentOrderEntity | None:
         """Return the order with this gateway_order_id or None."""
         return next(
