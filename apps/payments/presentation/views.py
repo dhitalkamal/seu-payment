@@ -160,9 +160,27 @@ class HealthCheckView(APIView):
 
 
 class CreateOrderView(APIView):
-    """Create a payment order for a registration."""
+    """List own orders (GET) or create a payment order (POST)."""
 
     permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Orders"],
+        summary="List my orders",
+        description="Returns all orders for the authenticated user, newest first.",
+        responses={
+            200: OpenApiResponse(
+                description="User orders.", response=_ORDER_RESP_SER(many=True)
+            ),
+            401: OpenApiResponse(description="Missing or invalid JWT."),
+        },
+    )
+    def get(self, request: Request) -> Response:
+        """Return all orders owned by the authenticated user."""
+        results = _LIST_ORDERS_UC(_ORDER_REPO()).execute(
+            user_id=_UUID(str(request.user.id)),
+        )
+        return success_response(_ORDER_RESP_SER(results, many=True).data, request=request)
 
     @extend_schema(
         tags=["Orders"],
@@ -259,26 +277,3 @@ class OrderDetailView(APIView):
         return success_response(_ORDER_RESP_SER(result).data, request=request)
 
 
-class OrderListView(APIView):
-    """List all payment orders belonging to the authenticated user."""
-
-    permission_classes = [IsAuthenticated]
-
-    @extend_schema(
-        tags=["Orders"],
-        summary="List my orders",
-        description="Returns all orders for the authenticated user, newest first.",
-        responses={
-            200: OpenApiResponse(
-                description="User orders.",
-                response=_ORDER_RESP_SER(many=True),
-            ),
-            401: OpenApiResponse(description="Missing or invalid JWT."),
-        },
-    )
-    def get(self, request: Request) -> Response:
-        """Return all orders owned by the authenticated user."""
-        results = _LIST_ORDERS_UC(_ORDER_REPO()).execute(
-            user_id=_UUID(str(request.user.id)),
-        )
-        return success_response(_ORDER_RESP_SER(results, many=True).data, request=request)
