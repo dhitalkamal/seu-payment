@@ -15,26 +15,32 @@ from rest_framework.views import APIView
 from apps.common.api.responses import created_response, error_response, success_response
 from apps.common.health import check_database, check_rabbitmq, check_redis
 from apps.payments.application.use_cases.create_order import CreatePaymentOrderUseCase
+from apps.payments.application.use_cases.create_promo_code import CreatePromoCodeUseCase
 from apps.payments.application.use_cases.get_order import GetOrderUseCase
 from apps.payments.application.use_cases.list_my_orders import ListMyOrdersUseCase
+from apps.payments.application.use_cases.list_promo_codes import ListPromoCodesUseCase
+from apps.payments.application.use_cases.process_to_processing import TransitionToProcessingUseCase
+from apps.payments.application.use_cases.process_webhook import ProcessWebhookUseCase
 from apps.payments.application.use_cases.request_refund import RequestRefundUseCase
+from apps.payments.application.use_cases.validate_promo_code import ValidatePromoCodeUseCase
+from apps.payments.domain.exceptions import InvalidPromoCodeError
+from apps.payments.infrastructure.publisher import publish_event
 from apps.payments.infrastructure.repositories import (
     DjangoPaymentOrderRepository,
     DjangoPromoCodeRepository,
     DjangoRefundRepository,
 )
-from apps.payments.application.use_cases.process_to_processing import TransitionToProcessingUseCase
-from apps.payments.application.use_cases.process_webhook import ProcessWebhookUseCase
 from apps.payments.infrastructure.webhook_verify import (
     verify_esewa_signature,
     verify_khalti_signature,
 )
-from apps.payments.infrastructure.publisher import publish_event
 from apps.payments.presentation.serializers import (
     CreateOrderSerializer,
+    CreatePromoCodeSerializer,
     EsewaWebhookSerializer,
     KhaltiWebhookSerializer,
     PaymentOrderResponseSerializer,
+    PromoCodeResponseSerializer,
     RefundResponseSerializer,
     RequestRefundSerializer,
 )
@@ -49,6 +55,9 @@ _REFUND_UC = RequestRefundUseCase
 _ORDER_REPO = DjangoPaymentOrderRepository
 _PROMO_REPO = DjangoPromoCodeRepository
 _REFUND_REPO = DjangoRefundRepository
+_VALIDATE_PROMO_UC = ValidatePromoCodeUseCase
+_CREATE_PROMO_UC = CreatePromoCodeUseCase
+_LIST_PROMOS_UC = ListPromoCodesUseCase
 _CREATE_ORDER_SER = CreateOrderSerializer
 _ORDER_RESP_SER = PaymentOrderResponseSerializer
 _REFUND_RESP_SER = RefundResponseSerializer
@@ -182,9 +191,7 @@ class CreateOrderView(APIView):
         summary="List my orders",
         description="Returns all orders for the authenticated user, newest first.",
         responses={
-            200: OpenApiResponse(
-                description="User orders.", response=_ORDER_RESP_SER(many=True)
-            ),
+            200: OpenApiResponse(description="User orders.", response=_ORDER_RESP_SER(many=True)),
             401: OpenApiResponse(description="Missing or invalid JWT."),
         },
     )
@@ -388,3 +395,67 @@ class EsewaWebhookView(APIView):
         return success_response({"received": True}, request=request)
 
 
+class PromoCodeListCreateView(APIView):
+    """GET /promo-codes/ - list; POST /promo-codes/ - create."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Promo Codes"],
+        summary="List promo codes",
+        responses={200: PromoCodeResponseSerializer(many=True)},
+    )
+    def get(self, request: Request) -> Response:
+        """Return all promo codes."""
+        promos = _LIST_PROMOS_UC(_PROMO_REPO()).execute()
+        return success_response(
+            PromoCodeResponseSerializer(promos, many=True).data, request=request
+        )
+
+    @extend_schema(
+        tags=["Promo Codes"],
+        summary="Create promo code",
+        request=CreatePromoCodeSerializer,
+        responses={201: PromoCodeResponseSerializer},
+    )
+    def post(self, request: Request) -> Response:
+        """Create a new promo code."""
+        ser = CreatePromoCodeSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+        promo = _CREATE_PROMO_UC(_PROMO_REPO()).execute(
+            code=d["code"],
+            discount_type=d["discount_type"],
+            discount_value=d["discount_value"],
+            valid_from=d["valid_from"],
+            valid_until=d["valid_until"],
+            max_usage_count=d.get("max_usage_count", 0),
+        )
+        return _CREATED(PromoCodeResponseSerializer(promo).data, request=request)
+
+
+class ValidatePromoCodeView(APIView):
+    """GET /promo-codes/{code}/validate/ - validate a single promo code."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Promo Codes"],
+        summary="Validate promo code",
+        responses={
+            200: PromoCodeResponseSerializer,
+            422: OpenApiResponse(description="Code invalid, expired, or exhausted."),
+        },
+    )
+    def get(self, request: Request, code: str) -> Response:
+        """Return promo details if valid, or 422 if not."""
+        try:
+            promo = _VALIDATE_PROMO_UC(_PROMO_REPO()).execute(code=code)
+        except InvalidPromoCodeError as exc:
+            return error_response(
+                code="ERR_PAYMENT_INVALID_PROMO",
+                message=str(exc),
+                http_status=422,
+                request=request,
+            )
+        return success_response(PromoCodeResponseSerializer(promo).data, request=request)

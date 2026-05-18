@@ -10,7 +10,9 @@ from .views import (
     HealthCheckView,
     KhaltiWebhookView,
     OrderDetailView,
+    PromoCodeListCreateView,
     RequestRefundView,
+    ValidatePromoCodeView,
 )
 
 urlpatterns: list[URLPattern] = [
@@ -20,4 +22,10 @@ urlpatterns: list[URLPattern] = [
     path("refunds/", RequestRefundView.as_view(), name="request-refund"),
     path("webhooks/khalti/", KhaltiWebhookView.as_view(), name="webhook-khalti"),
     path("webhooks/esewa/", EsewaWebhookView.as_view(), name="webhook-esewa"),
+    path("promo-codes/", PromoCodeListCreateView.as_view(), name="promo-code-list-create"),
+    path(
+        "promo-codes/<str:code>/validate/",
+        ValidatePromoCodeView.as_view(),
+        name="promo-code-validate",
+    ),
 ]

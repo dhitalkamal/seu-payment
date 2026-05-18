@@ -58,6 +58,7 @@ class DjangoPaymentOrderRepository(IPaymentOrderRepository):
             return PaymentOrder.objects.get(id=order_id).to_entity()
         except PaymentOrder.DoesNotExist:
             from apps.payments.domain.exceptions import OrderNotFoundError
+
             raise OrderNotFoundError("Order not found.")
 
     def get_by_gateway_order_id(self, gateway_order_id: str) -> PaymentOrderEntity | None:
@@ -98,3 +99,13 @@ class DjangoPromoCodeRepository(IPromoCodeRepository):
     def increment_usage(self, promo_id: uuid.UUID) -> None:
         """Atomically increment used_count by 1."""
         PromoCode.objects.filter(id=promo_id).update(used_count=django_models.F("used_count") + 1)
+
+    def create(self, entity: PromoCodeEntity) -> PromoCodeEntity:
+        """Persist a new promo code."""
+        obj = PromoCode.from_entity(entity)
+        obj.save()
+        return obj.to_entity()
+
+    def list_all(self) -> list[PromoCodeEntity]:
+        """Return all promo codes ordered by creation date."""
+        return [p.to_entity() for p in PromoCode.objects.order_by("-created_at")]

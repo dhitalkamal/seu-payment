@@ -51,3 +51,9 @@ class IPromoCodeRepository(ABC):
 
     @abstractmethod
     def increment_usage(self, promo_id: uuid.UUID) -> None: ...
+
+    @abstractmethod
+    def create(self, entity: PromoCodeEntity) -> PromoCodeEntity: ...
+
+    @abstractmethod
+    def list_all(self) -> list[PromoCodeEntity]: ...

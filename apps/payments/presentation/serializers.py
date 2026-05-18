@@ -76,3 +76,29 @@ class EsewaWebhookSerializer(serializers.Serializer):
     transaction_uuid = serializers.CharField(help_text="eSewa order ID (gateway_order_id).")
     transaction_code = serializers.CharField(required=False, default="")
     status = serializers.ChoiceField(choices=["COMPLETE", "FAILED", "PENDING", "AMBIGUOUS"])
+
+
+class CreatePromoCodeSerializer(serializers.Serializer):
+    """Payload for creating a promo code."""
+
+    code = serializers.CharField(max_length=50)
+    discount_type = serializers.ChoiceField(choices=["percentage", "fixed"])
+    discount_value = serializers.DecimalField(max_digits=10, decimal_places=2)
+    valid_from = serializers.DateTimeField()
+    valid_until = serializers.DateTimeField()
+    max_usage_count = serializers.IntegerField(min_value=0, default=0)
+
+
+class PromoCodeResponseSerializer(serializers.Serializer):
+    """Public shape of a promo code resource."""
+
+    id = serializers.UUIDField()
+    code = serializers.CharField()
+    discount_type = serializers.CharField()
+    discount_value = serializers.DecimalField(max_digits=10, decimal_places=2)
+    valid_from = serializers.DateTimeField()
+    valid_until = serializers.DateTimeField()
+    is_active = serializers.BooleanField()
+    max_usage_count = serializers.IntegerField()
+    used_count = serializers.IntegerField()
+    created_at = serializers.DateTimeField()
