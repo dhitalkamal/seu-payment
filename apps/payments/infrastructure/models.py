@@ -189,3 +189,36 @@ class PromoCode(models.Model):
             max_usage_count=entity.max_usage_count,
             used_count=entity.used_count,
         )
+
+
+class Dispute(models.Model):
+    """A payment dispute raised by an attendee or gateway."""
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        UNDER_REVIEW = "under_review", "Under Review"
+        RESOLVED = "resolved", "Resolved"
+        CLOSED = "closed", "Closed"
+
+    class Reason(models.TextChoices):
+        DUPLICATE = "duplicate", "Duplicate charge"
+        FRAUDULENT = "fraudulent", "Fraudulent"
+        NOT_RECEIVED = "not_received", "Product not received"
+        SUBSCRIPTION = "subscription_cancelled", "Subscription cancelled"
+        OTHER = "other", "Other"
+
+    class Meta:
+        db_table = '"payments"."dispute"'
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    order = models.ForeignKey(
+        PaymentOrder, on_delete=models.CASCADE, related_name="disputes"
+    )
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+    reason = models.CharField(max_length=30, choices=Reason.choices, default=Reason.OTHER)
+    description = models.TextField()
+    evidence = models.JSONField(default=dict, blank=True)
+    gateway_dispute_id = models.CharField(max_length=255, blank=True, default="")
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)

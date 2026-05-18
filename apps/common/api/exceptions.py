@@ -73,30 +73,20 @@ def api_exception_handler(exc: Exception, context: dict) -> Response | None:
             status=status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
     if http_status == status.HTTP_401_UNAUTHORIZED:
-        return Response(
-            _body("ERR_AUTH_UNAUTHORIZED", _extract(data, "Authentication credentials were not provided."), None, request),
-            status=401,
-        )
+        msg = _extract(data, "Authentication credentials were not provided.")
+        return Response(_body("ERR_AUTH_UNAUTHORIZED", msg, None, request), status=401)
     if http_status == status.HTTP_403_FORBIDDEN:
-        return Response(
-            _body("ERR_PERMISSION_DENIED", _extract(data, "You do not have permission to perform this action."), None, request),
-            status=403,
-        )
+        msg = _extract(data, "You do not have permission to perform this action.")
+        return Response(_body("ERR_PERMISSION_DENIED", msg, None, request), status=403)
     if http_status == status.HTTP_404_NOT_FOUND:
-        return Response(
-            _body("ERR_RESOURCE_NOT_FOUND", _extract(data, "The requested resource was not found."), None, request),
-            status=404,
-        )
+        msg = _extract(data, "The requested resource was not found.")
+        return Response(_body("ERR_RESOURCE_NOT_FOUND", msg, None, request), status=404)
     if http_status == status.HTTP_405_METHOD_NOT_ALLOWED:
-        return Response(
-            _body("ERR_METHOD_NOT_ALLOWED", _extract(data, "Method not allowed."), None, request),
-            status=405,
-        )
+        msg = _extract(data, "Method not allowed.")
+        return Response(_body("ERR_METHOD_NOT_ALLOWED", msg, None, request), status=405)
     if http_status == status.HTTP_429_TOO_MANY_REQUESTS:
-        return Response(
-            _body("ERR_RATE_LIMIT_EXCEEDED", _extract(data, "Request was throttled."), None, request),
-            status=429,
-        )
+        msg = _extract(data, "Request was throttled.")
+        return Response(_body("ERR_RATE_LIMIT_EXCEEDED", msg, None, request), status=429)
     return Response(
         _body("ERR_INTERNAL_ERROR", _extract(data, "An unexpected error occurred."), None, request),
         status=http_status,
