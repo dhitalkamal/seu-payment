@@ -1,4 +1,4 @@
-"""Use case: create a payment order with fee calculation and optional promo code."""
+"""Use case: create a payment order, call the gateway, and return a payment URL."""
 
 from __future__ import annotations
 
@@ -8,22 +8,33 @@ from decimal import Decimal
 
 from apps.payments.domain.entities import PaymentOrderEntity, PromoCodeEntity
 from apps.payments.domain.exceptions import InvalidPromoCodeError, OrderAlreadyExistsError
+from apps.payments.domain.gateway import IPaymentGateway, PaymentSession
 from apps.payments.domain.repositories import IPaymentOrderRepository, IPromoCodeRepository
 
-# ! platform fee is 5% of subtotal on the free plan
+# ! platform fee varies by org plan — free=5%, starter=3%, pro=1%, ngo/enterprise=0%
+PLAN_FEE_RATES: dict[str, Decimal] = {
+    "free": Decimal("0.05"),
+    "starter": Decimal("0.03"),
+    "pro": Decimal("0.01"),
+    "ngo": Decimal("0.00"),
+    "enterprise": Decimal("0.00"),
+}
+# fallback for unknown plans
 PLATFORM_FEE_RATE = Decimal("0.05")
 
 
 class CreatePaymentOrderUseCase:
-    """Create a payment order, applying fee formula and optional promo discount."""
+    """Create a payment order, call the gateway to initiate payment, return the payment URL."""
 
     def __init__(
         self,
         order_repo: IPaymentOrderRepository,
         promo_repo: IPromoCodeRepository,
+        gateway_client: IPaymentGateway | None = None,
     ) -> None:
         self._orders = order_repo
         self._promos = promo_repo
+        self._gateway = gateway_client
 
     def execute(
         self,
@@ -35,9 +46,14 @@ class CreatePaymentOrderUseCase:
         gateway: str,
         idempotency_key: uuid.UUID,
         promo_code: str | None = None,
-    ) -> PaymentOrderEntity:
+        customer_email: str = "",
+        return_url: str = "",
+        cancel_url: str = "",
+        description: str = "Sansaar event registration",
+        org_plan: str = "free",
+    ) -> tuple[PaymentOrderEntity, PaymentSession | None]:
         """
-        Calculate fees, apply promo if given, and persist the order.
+        Calculate fees, apply promo, persist order, call gateway, store gateway_order_id.
 
         @param user_id - UUID from JWT
         @param event_id - the event being paid for
@@ -46,13 +62,19 @@ class CreatePaymentOrderUseCase:
         @param gateway - khalti | esewa | stripe | paypal
         @param idempotency_key - re-submitting the same key returns the existing order
         @param promo_code - optional case-insensitive promo code
-        @returns the created or previously created PaymentOrderEntity
+        @param customer_email - buyer email from JWT (passed to gateway)
+        @param return_url - where the gateway redirects on success
+        @param cancel_url - where the gateway redirects on failure/cancel
+        @param description - label shown on the gateway payment page
+        @param org_plan - the organiser's plan (determines platform fee rate)
+        @returns tuple of (order, payment_session) — session is None for idempotent re-fetches
         @raises OrderAlreadyExistsError if another order exists for this registration
-        @raises InvalidPromoCodeError if the promo is missing, expired, inactive, or exhausted
+        @raises InvalidPromoCodeError if the promo is invalid
+        @raises PaymentGatewayError if the gateway rejects or is unreachable
         """
         existing = self._orders.get_by_idempotency_key(idempotency_key)
         if existing is not None:
-            return existing
+            return existing, None
 
         if self._orders.has_order_for_registration(registration_id):
             raise OrderAlreadyExistsError("An order already exists for this registration.")
@@ -66,7 +88,9 @@ class CreatePaymentOrderUseCase:
             discount_amount = self._apply_promo(promo, subtotal)
             promo_id = promo.id
 
-        platform_fee = (subtotal * PLATFORM_FEE_RATE).quantize(Decimal("0.01"))
+        # ! look up fee rate by org plan — fallback to 5% for unknown plans
+        fee_rate = PLAN_FEE_RATES.get(org_plan, PLATFORM_FEE_RATE)
+        platform_fee = (subtotal * fee_rate).quantize(Decimal("0.01"))
         total_amount = subtotal - discount_amount + platform_fee
 
         now = datetime.now(timezone.utc)
@@ -94,7 +118,24 @@ class CreatePaymentOrderUseCase:
         if promo_id is not None:
             self._promos.increment_usage(promo_id)
 
-        return result
+        # * call the gateway to initiate the payment session
+        session: PaymentSession | None = None
+        if self._gateway is not None:
+            session = self._gateway.initiate(
+                order_id=str(result.id),
+                amount=total_amount,
+                currency=result.currency,
+                description=description,
+                customer_email=customer_email,
+                return_url=return_url,
+                cancel_url=cancel_url,
+            )
+            # ! persist the gateway_order_id so webhooks can match this order
+            result.gateway_order_id = session.gateway_order_id
+            result.status = "processing"
+            result = self._orders.update(result)
+
+        return result, session
 
     def _validate_promo(self, promo: PromoCodeEntity) -> None:
         """Raise InvalidPromoCodeError if the promo cannot be applied."""

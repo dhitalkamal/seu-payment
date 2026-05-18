@@ -45,3 +45,17 @@ class DisputeNotFoundError(DomainError):
 
     http_status = 404
     code = "ERR_PAYMENT_DISPUTE_NOT_FOUND"
+
+
+class SubscriptionNotFoundError(DomainError):
+    """No subscription matches the given identifier or org."""
+
+    http_status = 404
+    code = "ERR_PAYMENT_SUBSCRIPTION_NOT_FOUND"
+
+
+class ActiveSubscriptionExistsError(DomainError):
+    """The org already has an active subscription — cancel it first."""
+
+    http_status = 409
+    code = "ERR_PAYMENT_ACTIVE_SUBSCRIPTION_EXISTS"

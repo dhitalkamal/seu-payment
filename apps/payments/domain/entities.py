@@ -76,3 +76,40 @@ class PromoCodeEntity:
     max_usage_count: int
     used_count: int
     created_at: datetime
+
+
+# * ---- Subscription billing ----
+
+
+@dataclass(slots=True)
+class SubscriptionEntity:
+    """An organisation's subscription to a platform plan."""
+
+    id: uuid.UUID
+    org_id: uuid.UUID
+    plan: str
+    status: str  # active | cancelled | past_due | expired
+    gateway: str
+    gateway_subscription_id: str
+    amount: Decimal
+    currency: str
+    current_period_start: datetime
+    current_period_end: datetime
+    created_at: datetime
+    updated_at: datetime
+    cancelled_at: datetime | None = None
+
+
+@dataclass(slots=True)
+class SubscriptionPaymentEntity:
+    """A single payment record in a subscription's billing history."""
+
+    id: uuid.UUID
+    subscription_id: uuid.UUID
+    amount: Decimal
+    currency: str
+    status: str  # completed | failed
+    gateway_transaction_id: str
+    period_start: datetime
+    period_end: datetime
+    paid_at: datetime

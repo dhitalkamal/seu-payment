@@ -27,6 +27,7 @@ from apps.payments.application.use_cases.request_refund import RequestRefundUseC
 from apps.payments.application.use_cases.update_dispute_status import UpdateDisputeStatusUseCase
 from apps.payments.application.use_cases.validate_promo_code import ValidatePromoCodeUseCase
 from apps.payments.domain.exceptions import DisputeNotFoundError, InvalidPromoCodeError
+from apps.payments.infrastructure.gateways import get_gateway
 from apps.payments.infrastructure.publisher import publish_event
 from apps.payments.infrastructure.repositories import (
     DjangoDisputeRepository,
@@ -37,11 +38,14 @@ from apps.payments.infrastructure.repositories import (
 from apps.payments.infrastructure.webhook_verify import (
     verify_esewa_signature,
     verify_khalti_signature,
+    verify_stripe_signature,
 )
 from apps.payments.presentation.serializers import (
+    CancelSubscriptionSerializer,
     CreateDisputeSerializer,
     CreateOrderSerializer,
     CreatePromoCodeSerializer,
+    CreateSubscriptionSerializer,
     DisputeResponseSerializer,
     EsewaWebhookSerializer,
     KhaltiWebhookSerializer,
@@ -49,6 +53,8 @@ from apps.payments.presentation.serializers import (
     PromoCodeResponseSerializer,
     RefundResponseSerializer,
     RequestRefundSerializer,
+    SubscriptionPaymentResponseSerializer,
+    SubscriptionResponseSerializer,
     UpdateDisputeStatusSerializer,
 )
 
@@ -230,26 +236,49 @@ class CreateOrderView(APIView):
         },
     )
     def post(self, request: Request) -> Response:
-        """Validate payload, compute fees, and persist the order."""
+        """Validate payload, compute fees, call gateway, and return the payment URL."""
         ser = _CREATE_ORDER_SER(data=request.data)
         ser.is_valid(raise_exception=True)
         d = ser.validated_data
 
-        result = _CREATE_ORDER_UC(
+        gateway_name = d["gateway"]
+        email = request.user.token.get("email", "")
+
+        # * build return/cancel URLs - gateway redirects to our callback endpoint,
+        # which processes the result and then redirects to the frontend
+        base_web = settings.FRONTEND_WEB_URL
+        callback_base = settings.PAYMENT_CALLBACK_BASE_URL
+        return_url = f"{callback_base}/callbacks/{gateway_name}/"
+        cancel_url = f"{base_web}/payment/failure"
+
+        gateway_client = get_gateway(gateway_name)
+
+        order, session = _CREATE_ORDER_UC(
             order_repo=_ORDER_REPO(),
             promo_repo=_PROMO_REPO(),
+            gateway_client=gateway_client,
         ).execute(
             user_id=_UUID(str(request.user.id)),
             event_id=d["event_id"],
             registration_id=d["registration_id"],
             subtotal=d["subtotal"],
-            gateway=d["gateway"],
+            gateway=gateway_name,
             idempotency_key=d["idempotency_key"],
             promo_code=d["promo_code"],
+            customer_email=email,
+            return_url=return_url,
+            cancel_url=cancel_url,
+            org_plan=d.get("org_plan", "free"),
         )
-        # transition to processing now that the client will be redirected to the gateway
-        result = _TO_PROCESSING_UC(_ORDER_REPO()).execute(order_id=result.id)
-        return _CREATED(_ORDER_RESP_SER(result).data, request=request)
+
+        resp_data = _ORDER_RESP_SER(order).data
+        if session is not None:
+            resp_data["payment_url"] = session.payment_url
+            # * eSewa returns form data the client needs to POST
+            if gateway_name == "esewa" and "form_data" in session.raw_response:
+                resp_data["esewa_form_data"] = session.raw_response["form_data"]
+                resp_data["esewa_form_url"] = session.raw_response["form_url"]
+        return _CREATED(resp_data, request=request)
 
 
 class RequestRefundView(APIView):
@@ -406,6 +435,367 @@ class EsewaWebhookView(APIView):
         return success_response({"received": True}, request=request)
 
 
+class StripeWebhookView(APIView):
+    """Receive payment status callbacks from Stripe via webhook events."""
+
+    authentication_classes: list = []
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        tags=["Webhooks"],
+        summary="Stripe payment webhook",
+        auth=[],
+        responses={200: OpenApiResponse(description="Webhook processed.")},
+    )
+    def post(self, request: Request) -> Response:
+        """Process the Stripe webhook event and update the matching order."""
+        sig = request.headers.get("Stripe-Signature", "")
+        if not verify_stripe_signature(request.body, sig):
+            return error_response(
+                code="ERR_PAYMENT_INVALID_SIGNATURE",
+                message="Stripe webhook signature verification failed.",
+                http_status=400,
+                request=request,
+            )
+        import json
+
+        event_data = json.loads(request.body)
+        event_type = event_data.get("type", "")
+
+        # * we only care about checkout.session.completed and checkout.session.expired
+        if event_type == "checkout.session.completed":
+            session_obj = event_data.get("data", {}).get("object", {})
+            session_id = session_obj.get("id", "")
+            order = _WEBHOOK_UC(_ORDER_REPO()).execute(
+                gateway_order_id=session_id,
+                status="completed",
+                gateway_transaction_id=session_obj.get("payment_intent", ""),
+            )
+            if order.status == "completed":
+                publish_event(
+                    routing_key="payment.order.completed",
+                    payload={
+                        "order_id": str(order.id),
+                        "registration_id": str(order.registration_id),
+                        "user_id": str(order.user_id),
+                        "event_id": str(order.event_id),
+                    },
+                )
+        elif event_type in ("checkout.session.expired", "checkout.session.async_payment_failed"):
+            session_obj = event_data.get("data", {}).get("object", {})
+            session_id = session_obj.get("id", "")
+            _WEBHOOK_UC(_ORDER_REPO()).execute(
+                gateway_order_id=session_id,
+                status="failed",
+                gateway_transaction_id="",
+            )
+
+        return success_response({"received": True}, request=request)
+
+
+class PayPalWebhookView(APIView):
+    """Capture a PayPal order after user approval and process the result."""
+
+    authentication_classes: list = []
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        tags=["Webhooks"],
+        summary="PayPal payment callback",
+        auth=[],
+        responses={200: OpenApiResponse(description="Payment captured.")},
+    )
+    def post(self, request: Request) -> Response:
+        """Capture the approved PayPal order and mark it completed or failed."""
+        from apps.payments.infrastructure.gateways.paypal import capture_order
+
+        paypal_order_id = request.data.get("paypal_order_id", "")
+        if not paypal_order_id:
+            return error_response(
+                code="ERR_PAYMENT_MISSING_ID",
+                message="paypal_order_id is required.",
+                http_status=400,
+                request=request,
+            )
+
+        try:
+            capture_response = capture_order(paypal_order_id)
+        except Exception as exc:
+            return error_response(
+                code="ERR_PAYMENT_CAPTURE_FAILED",
+                message=str(exc),
+                http_status=502,
+                request=request,
+            )
+
+        capture_status = capture_response.get("status", "")
+        internal_status = "completed" if capture_status == "COMPLETED" else "failed"
+
+        order = _WEBHOOK_UC(_ORDER_REPO()).execute(
+            gateway_order_id=paypal_order_id,
+            status=internal_status,
+            gateway_transaction_id=paypal_order_id,
+        )
+        if order.status == "completed":
+            publish_event(
+                routing_key="payment.order.completed",
+                payload={
+                    "order_id": str(order.id),
+                    "registration_id": str(order.registration_id),
+                    "user_id": str(order.user_id),
+                    "event_id": str(order.event_id),
+                },
+            )
+        return success_response(
+            {"captured": internal_status == "completed", "order_id": str(order.id)},
+            request=request,
+        )
+
+
+class PaymentCallbackView(APIView):
+    """Universal callback endpoint - gateways redirect here after payment. Redirects to frontend."""
+
+    authentication_classes: list = []
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        tags=["Callbacks"],
+        summary="Gateway callback redirect",
+        auth=[],
+        responses={302: OpenApiResponse(description="Redirect to frontend.")},
+    )
+    def get(self, request: Request, gateway: str) -> Response:
+        """Parse gateway-specific query params and redirect to the frontend success/failure page."""
+        from django.http import HttpResponseRedirect
+
+        base = settings.FRONTEND_WEB_URL
+
+        if gateway == "khalti":
+            # Khalti appends ?pidx=...&status=...&purchase_order_id=...
+            status = request.query_params.get("status", "")
+            pidx = request.query_params.get("pidx", "")
+            if status == "Completed" and pidx:
+                # * look up and auto-complete via webhook UC
+                try:
+                    order = _WEBHOOK_UC(_ORDER_REPO()).execute(
+                        gateway_order_id=pidx,
+                        status="completed",
+                        gateway_transaction_id=request.query_params.get("transaction_id", ""),
+                    )
+                    if order.status == "completed":
+                        publish_event(
+                            routing_key="payment.order.completed",
+                            payload={
+                                "order_id": str(order.id),
+                                "registration_id": str(order.registration_id),
+                                "user_id": str(order.user_id),
+                                "event_id": str(order.event_id),
+                            },
+                        )
+                    return HttpResponseRedirect(f"{base}/payment/success?order_id={order.id}")
+                except Exception:
+                    pass
+            return HttpResponseRedirect(f"{base}/payment/failure")
+
+        if gateway == "esewa":
+            # eSewa appends ?data=<base64_json> on success
+            import base64
+            import json
+
+            data_b64 = request.query_params.get("data", "")
+            if data_b64:
+                try:
+                    decoded = json.loads(base64.b64decode(data_b64))
+                    tx_uuid = decoded.get("transaction_uuid", "")
+                    status_val = decoded.get("status", "")
+                    internal = "completed" if status_val == "COMPLETE" else "failed"
+                    order = _WEBHOOK_UC(_ORDER_REPO()).execute(
+                        gateway_order_id=tx_uuid,
+                        status=internal,
+                        gateway_transaction_id=decoded.get("transaction_code", ""),
+                    )
+                    if order.status == "completed":
+                        publish_event(
+                            routing_key="payment.order.completed",
+                            payload={
+                                "order_id": str(order.id),
+                                "registration_id": str(order.registration_id),
+                                "user_id": str(order.user_id),
+                                "event_id": str(order.event_id),
+                            },
+                        )
+                    return HttpResponseRedirect(f"{base}/payment/success?order_id={order.id}")
+                except Exception:
+                    pass
+            return HttpResponseRedirect(f"{base}/payment/failure")
+
+        if gateway == "stripe":
+            session_id = request.query_params.get("session_id", "")
+            if session_id:
+                return HttpResponseRedirect(f"{base}/payment/success?session_id={session_id}")
+            return HttpResponseRedirect(f"{base}/payment/failure")
+
+        if gateway == "paypal":
+            token = request.query_params.get("token", "")
+            if token:
+                return HttpResponseRedirect(f"{base}/payment/success?paypal_token={token}")
+            return HttpResponseRedirect(f"{base}/payment/failure")
+
+        return HttpResponseRedirect(f"{base}/payment/failure")
+
+
+# * ---- Subscription views ----
+
+
+class SubscriptionCreateView(APIView):
+    """GET /subscriptions/ - list all subscriptions; POST /subscriptions/ - create one."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Subscriptions"],
+        summary="List all subscriptions",
+        responses={200: OpenApiResponse(description="All subscriptions.", response=SubscriptionResponseSerializer(many=True))},
+    )
+    def get(self, request: Request) -> Response:
+        """Return every subscription across all orgs, newest first."""
+        from apps.payments.infrastructure.repositories import DjangoSubscriptionRepository
+
+        subs = DjangoSubscriptionRepository().list_all()
+        return success_response(SubscriptionResponseSerializer(subs, many=True).data, request=request)
+
+    @extend_schema(
+        tags=["Subscriptions"],
+        summary="Subscribe to a plan",
+        request=CreateSubscriptionSerializer,
+        responses={
+            201: OpenApiResponse(description="Subscription created."),
+            409: OpenApiResponse(description="Active subscription already exists."),
+        },
+    )
+    def post(self, request: Request) -> Response:
+        """Create a subscription and return the payment URL for paid plans."""
+        from apps.payments.application.use_cases.create_subscription import CreateSubscriptionUseCase
+        from apps.payments.infrastructure.repositories import DjangoSubscriptionRepository
+
+        ser = CreateSubscriptionSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+
+        gateway_name = d["gateway"]
+        email = request.user.token.get("email", "")
+        callback_base = settings.PAYMENT_CALLBACK_BASE_URL
+        base_web = settings.FRONTEND_WEB_URL
+
+        gateway_client = get_gateway(gateway_name)
+
+        sub, session = CreateSubscriptionUseCase(
+            sub_repo=DjangoSubscriptionRepository(),
+            gateway_client=gateway_client,
+        ).execute(
+            org_id=d["org_id"],
+            plan=d["plan"],
+            gateway=gateway_name,
+            return_url=f"{callback_base}/callbacks/{gateway_name}/",
+            cancel_url=f"{base_web}/orgs/billing?cancelled=true",
+            customer_email=email,
+        )
+
+        resp_data = SubscriptionResponseSerializer(sub).data
+        if session is not None:
+            resp_data["payment_url"] = session.payment_url
+            if gateway_name == "esewa" and "form_data" in session.raw_response:
+                resp_data["esewa_form_data"] = session.raw_response["form_data"]
+                resp_data["esewa_form_url"] = session.raw_response["form_url"]
+        return _CREATED(resp_data, request=request)
+
+
+class SubscriptionCurrentView(APIView):
+    """GET /subscriptions/current/?org_id=... - get active subscription for an org."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Subscriptions"],
+        summary="Get active subscription",
+        responses={
+            200: OpenApiResponse(description="Active subscription found."),
+            404: OpenApiResponse(description="No active subscription."),
+        },
+    )
+    def get(self, request: Request) -> Response:
+        """Return the org's active subscription or 404."""
+        from apps.payments.infrastructure.repositories import DjangoSubscriptionRepository
+
+        org_id = request.query_params.get("org_id", "")
+        if not org_id:
+            return error_response(
+                code="ERR_PAYMENT_MISSING_ORG_ID",
+                message="org_id query parameter is required.",
+                http_status=400,
+                request=request,
+            )
+
+        sub = DjangoSubscriptionRepository().get_active_by_org(_UUID(org_id))
+        if sub is None:
+            return error_response(
+                code="ERR_PAYMENT_SUBSCRIPTION_NOT_FOUND",
+                message="No active subscription for this organisation.",
+                http_status=404,
+                request=request,
+            )
+        return success_response(SubscriptionResponseSerializer(sub).data, request=request)
+
+
+class SubscriptionCancelView(APIView):
+    """POST /subscriptions/cancel/ - cancel the org's active subscription."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Subscriptions"],
+        summary="Cancel subscription",
+        responses={
+            200: OpenApiResponse(description="Subscription cancelled."),
+            404: OpenApiResponse(description="No active subscription."),
+        },
+    )
+    def post(self, request: Request) -> Response:
+        """Cancel the active subscription for the given org."""
+        from apps.payments.application.use_cases.cancel_subscription import CancelSubscriptionUseCase
+        from apps.payments.infrastructure.repositories import DjangoSubscriptionRepository
+
+        ser = CancelSubscriptionSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+
+        sub = CancelSubscriptionUseCase(
+            sub_repo=DjangoSubscriptionRepository(),
+        ).execute(org_id=ser.validated_data["org_id"])
+
+        return success_response(SubscriptionResponseSerializer(sub).data, request=request)
+
+
+class SubscriptionPaymentHistoryView(APIView):
+    """GET /subscriptions/<uuid>/payments/ - billing history for a subscription."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Subscriptions"],
+        summary="Subscription payment history",
+        responses={200: OpenApiResponse(description="Payment records.")},
+    )
+    def get(self, request: Request, subscription_id: uuid.UUID) -> Response:
+        """Return all payment records for a subscription."""
+        from apps.payments.infrastructure.repositories import DjangoSubscriptionPaymentRepository
+
+        payments = DjangoSubscriptionPaymentRepository().list_by_subscription(subscription_id)
+        return success_response(
+            SubscriptionPaymentResponseSerializer(payments, many=True).data,
+            request=request,
+        )
+
+
 class PromoCodeListCreateView(APIView):
     """GET /promo-codes/ - list; POST /promo-codes/ - create."""
 
@@ -546,3 +936,21 @@ class DisputeDetailView(APIView):
                 code=exc.code, message=str(exc), http_status=404, request=request
             )
         return success_response(DisputeResponseSerializer(dispute).data, request=request)
+
+
+class DisputeListAllView(APIView):
+    """GET /disputes/ — list all disputes platform-wide (admin)."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Disputes"],
+        summary="List all disputes (admin)",
+        responses={200: DisputeResponseSerializer(many=True)},
+    )
+    def get(self, request: Request) -> Response:
+        """Return every dispute across all orders, newest first."""
+        disputes = _DISPUTE_REPO().list_all()
+        return success_response(
+            DisputeResponseSerializer(disputes, many=True).data, request=request
+        )

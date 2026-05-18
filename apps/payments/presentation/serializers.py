@@ -14,6 +14,12 @@ class CreateOrderSerializer(serializers.Serializer):
     gateway = serializers.ChoiceField(choices=["khalti", "esewa", "stripe", "paypal"])
     idempotency_key = serializers.UUIDField()
     promo_code = serializers.CharField(max_length=50, required=False, allow_null=True, default=None)
+    # ! org_plan drives the platform fee rate — passed by the frontend from the event/org context
+    org_plan = serializers.ChoiceField(
+        choices=["free", "starter", "pro", "ngo", "enterprise"],
+        required=False,
+        default="free",
+    )
 
 
 class RequestRefundSerializer(serializers.Serializer):
@@ -137,3 +143,52 @@ class DisputeResponseSerializer(serializers.Serializer):
     resolved_at = serializers.DateTimeField(allow_null=True)
     created_at = serializers.DateTimeField()
     updated_at = serializers.DateTimeField()
+
+
+# * ---- Subscription serializers ----
+
+
+class CreateSubscriptionSerializer(serializers.Serializer):
+    """Payload for subscribing an org to a plan."""
+
+    org_id = serializers.UUIDField()
+    plan = serializers.ChoiceField(choices=["starter", "pro", "ngo", "enterprise"])
+    gateway = serializers.ChoiceField(choices=["khalti", "esewa", "stripe", "paypal"])
+
+
+class CancelSubscriptionSerializer(serializers.Serializer):
+    """Payload for cancelling an org's active subscription."""
+
+    org_id = serializers.UUIDField()
+
+
+class SubscriptionResponseSerializer(serializers.Serializer):
+    """Public shape of a subscription resource."""
+
+    id = serializers.UUIDField()
+    org_id = serializers.UUIDField()
+    plan = serializers.CharField()
+    status = serializers.CharField()
+    gateway = serializers.CharField()
+    gateway_subscription_id = serializers.CharField()
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    currency = serializers.CharField()
+    current_period_start = serializers.DateTimeField()
+    current_period_end = serializers.DateTimeField()
+    cancelled_at = serializers.DateTimeField(allow_null=True)
+    created_at = serializers.DateTimeField()
+    updated_at = serializers.DateTimeField()
+
+
+class SubscriptionPaymentResponseSerializer(serializers.Serializer):
+    """Public shape of a subscription payment record."""
+
+    id = serializers.UUIDField()
+    subscription_id = serializers.UUIDField()
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    currency = serializers.CharField()
+    status = serializers.CharField()
+    gateway_transaction_id = serializers.CharField()
+    period_start = serializers.DateTimeField()
+    period_end = serializers.DateTimeField()
+    paid_at = serializers.DateTimeField()

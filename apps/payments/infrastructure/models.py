@@ -12,6 +12,8 @@ from apps.payments.domain.entities import (
     PaymentOrderEntity,
     PromoCodeEntity,
     RefundEntity,
+    SubscriptionEntity,
+    SubscriptionPaymentEntity,
 )
 
 
@@ -258,4 +260,132 @@ class Dispute(models.Model):
             evidence=entity.evidence,
             gateway_dispute_id=entity.gateway_dispute_id,
             resolved_at=entity.resolved_at,
+        )
+
+
+# * ---- Subscription billing models ----
+
+
+class Subscription(models.Model):
+    """An organisation's subscription to a platform plan (recurring billing)."""
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        CANCELLED = "cancelled", "Cancelled"
+        PAST_DUE = "past_due", "Past Due"
+        EXPIRED = "expired", "Expired"
+
+    class Plan(models.TextChoices):
+        STARTER = "starter", "Starter"
+        PRO = "pro", "Pro"
+        NGO = "ngo", "NGO"
+        ENTERPRISE = "enterprise", "Enterprise"
+
+    class Meta:
+        db_table = '"payments"."subscription"'
+        indexes = [
+            models.Index(fields=["org_id", "-created_at"]),
+            models.Index(fields=["gateway_subscription_id"]),
+        ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    org_id = models.UUIDField()
+    plan = models.CharField(max_length=20, choices=Plan.choices)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    gateway = models.CharField(max_length=30)
+    gateway_subscription_id = models.CharField(max_length=255, blank=True, default="")
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=10, default="NPR")
+    current_period_start = models.DateTimeField()
+    current_period_end = models.DateTimeField()
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def to_entity(self) -> SubscriptionEntity:
+        """Map this ORM row to a pure-Python SubscriptionEntity."""
+        return SubscriptionEntity(
+            id=self.id,
+            org_id=self.org_id,
+            plan=self.plan,
+            status=self.status,
+            gateway=self.gateway,
+            gateway_subscription_id=self.gateway_subscription_id,
+            amount=self.amount,
+            currency=self.currency,
+            current_period_start=self.current_period_start,
+            current_period_end=self.current_period_end,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+            cancelled_at=self.cancelled_at,
+        )
+
+    @classmethod
+    def from_entity(cls, entity: SubscriptionEntity) -> "Subscription":
+        """Build an unsaved ORM instance from a SubscriptionEntity."""
+        return cls(
+            id=entity.id,
+            org_id=entity.org_id,
+            plan=entity.plan,
+            status=entity.status,
+            gateway=entity.gateway,
+            gateway_subscription_id=entity.gateway_subscription_id,
+            amount=entity.amount,
+            currency=entity.currency,
+            current_period_start=entity.current_period_start,
+            current_period_end=entity.current_period_end,
+            cancelled_at=entity.cancelled_at,
+        )
+
+
+class SubscriptionPayment(models.Model):
+    """A single billing cycle payment within a subscription."""
+
+    class Status(models.TextChoices):
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    class Meta:
+        db_table = '"payments"."subscription_payment"'
+        indexes = [models.Index(fields=["subscription", "-paid_at"])]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    subscription = models.ForeignKey(
+        Subscription, on_delete=models.CASCADE, related_name="payments"
+    )
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=10, default="NPR")
+    status = models.CharField(max_length=20, choices=Status.choices)
+    gateway_transaction_id = models.CharField(max_length=255, blank=True, default="")
+    period_start = models.DateTimeField()
+    period_end = models.DateTimeField()
+    paid_at = models.DateTimeField()
+
+    def to_entity(self) -> SubscriptionPaymentEntity:
+        """Map this ORM row to a pure-Python SubscriptionPaymentEntity."""
+        return SubscriptionPaymentEntity(
+            id=self.id,
+            subscription_id=self.subscription_id,
+            amount=self.amount,
+            currency=self.currency,
+            status=self.status,
+            gateway_transaction_id=self.gateway_transaction_id,
+            period_start=self.period_start,
+            period_end=self.period_end,
+            paid_at=self.paid_at,
+        )
+
+    @classmethod
+    def from_entity(cls, entity: SubscriptionPaymentEntity) -> "SubscriptionPayment":
+        """Build an unsaved ORM instance from a SubscriptionPaymentEntity."""
+        return cls(
+            id=entity.id,
+            subscription_id=entity.subscription_id,
+            amount=entity.amount,
+            currency=entity.currency,
+            status=entity.status,
+            gateway_transaction_id=entity.gateway_transaction_id,
+            period_start=entity.period_start,
+            period_end=entity.period_end,
+            paid_at=entity.paid_at,
         )

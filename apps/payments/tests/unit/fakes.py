@@ -230,3 +230,7 @@ class FakeDisputeRepository(IDisputeRepository):
         """Overwrite the stored entity and return it."""
         self._store[entity.id] = entity
         return entity
+
+    def list_all(self) -> list[DisputeEntity]:
+        """Return all disputes, newest first."""
+        return sorted(self._store.values(), key=lambda d: d.created_at, reverse=True)

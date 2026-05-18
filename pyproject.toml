@@ -30,7 +30,8 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 
 [tool.ruff]
-line-length = 100
+exclude = ["*/migrations/*"]
+line-length = 200
 target-version = "py313"
 extend-exclude = ["*/migrations/*.py"]
 

@@ -11,19 +11,31 @@ from apps.payments.domain.entities import (
     PaymentOrderEntity,
     PromoCodeEntity,
     RefundEntity,
+    SubscriptionEntity,
+    SubscriptionPaymentEntity,
 )
 from apps.payments.domain.exceptions import (
     DisputeNotFoundError,
     InvalidPromoCodeError,
     OrderNotFoundError,
+    SubscriptionNotFoundError,
 )
 from apps.payments.domain.repositories import (
     IDisputeRepository,
     IPaymentOrderRepository,
     IPromoCodeRepository,
     IRefundRepository,
+    ISubscriptionPaymentRepository,
+    ISubscriptionRepository,
 )
-from apps.payments.infrastructure.models import Dispute, PaymentOrder, PromoCode, Refund
+from apps.payments.infrastructure.models import (
+    Dispute,
+    PaymentOrder,
+    PromoCode,
+    Refund,
+    Subscription,
+    SubscriptionPayment,
+)
 
 
 class DjangoPaymentOrderRepository(IPaymentOrderRepository):
@@ -156,3 +168,91 @@ class DjangoDisputeRepository(IDisputeRepository):
         obj.resolved_at = entity.resolved_at
         obj.save()
         return obj.to_entity()
+
+    def list_all(self) -> list[DisputeEntity]:
+        """Return all disputes platform-wide, newest first."""
+        return [
+            obj.to_entity()
+            for obj in Dispute.objects.all().order_by("-created_at")
+        ]
+
+
+# * ---- Subscription repositories ----
+
+
+class DjangoSubscriptionRepository(ISubscriptionRepository):
+    """Persists Subscription entities using the Django ORM."""
+
+    def create(self, entity: SubscriptionEntity) -> SubscriptionEntity:
+        """Persist a new subscription and return the saved entity."""
+        obj = Subscription.from_entity(entity)
+        obj.save(using="default")
+        return obj.to_entity()
+
+    def get_by_id(self, sub_id: uuid.UUID) -> SubscriptionEntity:
+        """Fetch by id. Raises SubscriptionNotFoundError if absent."""
+        try:
+            return Subscription.objects.get(id=sub_id).to_entity()
+        except Subscription.DoesNotExist:
+            raise SubscriptionNotFoundError("Subscription not found.")
+
+    def get_active_by_org(self, org_id: uuid.UUID) -> SubscriptionEntity | None:
+        """Return the active subscription for an org, or None."""
+        try:
+            return Subscription.objects.get(org_id=org_id, status="active").to_entity()
+        except Subscription.DoesNotExist:
+            return None
+
+    def get_by_gateway_id(self, gateway_subscription_id: str) -> SubscriptionEntity | None:
+        """Lookup by gateway subscription ID for webhook matching."""
+        try:
+            return Subscription.objects.get(
+                gateway_subscription_id=gateway_subscription_id
+            ).to_entity()
+        except Subscription.DoesNotExist:
+            return None
+
+    def update(self, entity: SubscriptionEntity) -> SubscriptionEntity:
+        """Update mutable subscription fields and save."""
+        obj = Subscription.objects.get(id=entity.id)
+        obj.status = entity.status
+        obj.plan = entity.plan
+        obj.current_period_start = entity.current_period_start
+        obj.current_period_end = entity.current_period_end
+        obj.cancelled_at = entity.cancelled_at
+        obj.gateway_subscription_id = entity.gateway_subscription_id
+        obj.save()
+        return obj.to_entity()
+
+    def list_by_org(self, org_id: uuid.UUID) -> list[SubscriptionEntity]:
+        """Return all subscriptions for an org, newest first."""
+        return [
+            obj.to_entity()
+            for obj in Subscription.objects.filter(org_id=org_id).order_by("-created_at")
+        ]
+
+    def list_all(self) -> list[SubscriptionEntity]:
+        """Return every subscription across all orgs, newest first."""
+        return [
+            obj.to_entity()
+            for obj in Subscription.objects.all().order_by("-created_at")
+        ]
+
+
+class DjangoSubscriptionPaymentRepository(ISubscriptionPaymentRepository):
+    """Persists SubscriptionPayment records using the Django ORM."""
+
+    def create(self, entity: SubscriptionPaymentEntity) -> SubscriptionPaymentEntity:
+        """Persist a subscription payment record."""
+        obj = SubscriptionPayment.from_entity(entity)
+        obj.save(using="default")
+        return obj.to_entity()
+
+    def list_by_subscription(self, sub_id: uuid.UUID) -> list[SubscriptionPaymentEntity]:
+        """Return payment records for a subscription, newest first."""
+        return [
+            obj.to_entity()
+            for obj in SubscriptionPayment.objects.filter(
+                subscription_id=sub_id
+            ).order_by("-paid_at")
+        ]
