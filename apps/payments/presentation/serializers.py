@@ -102,3 +102,38 @@ class PromoCodeResponseSerializer(serializers.Serializer):
     max_usage_count = serializers.IntegerField()
     used_count = serializers.IntegerField()
     created_at = serializers.DateTimeField()
+
+
+class CreateDisputeSerializer(serializers.Serializer):
+    """Payload for opening a dispute against a completed order."""
+
+    reason = serializers.ChoiceField(
+        choices=["duplicate", "fraudulent", "not_received", "subscription_cancelled", "other"]
+    )
+    description = serializers.CharField(max_length=2000)
+    evidence = serializers.DictField(required=False, default=dict)
+
+
+class UpdateDisputeStatusSerializer(serializers.Serializer):
+    """Payload for advancing a dispute's lifecycle status (admin only)."""
+
+    status = serializers.ChoiceField(
+        choices=["open", "under_review", "resolved", "closed"]
+    )
+    resolution_notes = serializers.CharField(max_length=2000, required=False, default="")
+
+
+class DisputeResponseSerializer(serializers.Serializer):
+    """Public shape of a dispute resource."""
+
+    id = serializers.UUIDField()
+    order_id = serializers.UUIDField()
+    user_id = serializers.UUIDField()
+    status = serializers.CharField()
+    reason = serializers.CharField()
+    description = serializers.CharField()
+    evidence = serializers.DictField()
+    gateway_dispute_id = serializers.CharField()
+    resolved_at = serializers.DateTimeField(allow_null=True)
+    created_at = serializers.DateTimeField()
+    updated_at = serializers.DateTimeField()

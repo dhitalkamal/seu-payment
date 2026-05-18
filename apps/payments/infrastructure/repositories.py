@@ -6,14 +6,24 @@ import uuid
 
 from django.db import models as django_models
 
-from apps.payments.domain.entities import PaymentOrderEntity, PromoCodeEntity, RefundEntity
-from apps.payments.domain.exceptions import InvalidPromoCodeError, OrderNotFoundError
+from apps.payments.domain.entities import (
+    DisputeEntity,
+    PaymentOrderEntity,
+    PromoCodeEntity,
+    RefundEntity,
+)
+from apps.payments.domain.exceptions import (
+    DisputeNotFoundError,
+    InvalidPromoCodeError,
+    OrderNotFoundError,
+)
 from apps.payments.domain.repositories import (
+    IDisputeRepository,
     IPaymentOrderRepository,
     IPromoCodeRepository,
     IRefundRepository,
 )
-from apps.payments.infrastructure.models import PaymentOrder, PromoCode, Refund
+from apps.payments.infrastructure.models import Dispute, PaymentOrder, PromoCode, Refund
 
 
 class DjangoPaymentOrderRepository(IPaymentOrderRepository):
@@ -109,3 +119,40 @@ class DjangoPromoCodeRepository(IPromoCodeRepository):
     def list_all(self) -> list[PromoCodeEntity]:
         """Return all promo codes ordered by creation date."""
         return [p.to_entity() for p in PromoCode.objects.order_by("-created_at")]
+
+
+class DjangoDisputeRepository(IDisputeRepository):
+    """Persists Dispute entities using the Django ORM."""
+
+    def create(self, entity: DisputeEntity) -> DisputeEntity:
+        """Persist a new dispute and return the saved entity."""
+        obj = Dispute.from_entity(entity)
+        obj.save()
+        return obj.to_entity()
+
+    def get_by_id(self, dispute_id: uuid.UUID) -> DisputeEntity:
+        """Fetch by id. Raises DisputeNotFoundError if absent."""
+        try:
+            return Dispute.objects.get(id=dispute_id).to_entity()
+        except Dispute.DoesNotExist:
+            raise DisputeNotFoundError("Dispute not found.")
+
+    def list_by_order(
+        self, order_id: uuid.UUID, user_id: uuid.UUID
+    ) -> list[DisputeEntity]:
+        """Return disputes for the given order scoped to the user."""
+        return [
+            obj.to_entity()
+            for obj in Dispute.objects.filter(
+                order_id=order_id, user_id=user_id
+            ).order_by("-created_at")
+        ]
+
+    def update(self, entity: DisputeEntity) -> DisputeEntity:
+        """Update mutable dispute fields and return the saved entity."""
+        obj = Dispute.objects.get(id=entity.id)
+        obj.status = entity.status
+        obj.evidence = entity.evidence
+        obj.resolved_at = entity.resolved_at
+        obj.save()
+        return obj.to_entity()

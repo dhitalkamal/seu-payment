@@ -46,6 +46,23 @@ class RefundEntity:
 
 
 @dataclass(slots=True)
+class DisputeEntity:
+    """A payment dispute raised by a user against a completed order."""
+
+    id: uuid.UUID
+    order_id: uuid.UUID
+    user_id: uuid.UUID
+    status: str
+    reason: str
+    description: str
+    evidence: dict
+    gateway_dispute_id: str
+    resolved_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(slots=True)
 class PromoCodeEntity:
     """A discount code applied at order creation time."""
 

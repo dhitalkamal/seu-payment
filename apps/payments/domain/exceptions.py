@@ -38,3 +38,10 @@ class RefundNotAllowedError(DomainError):
 
     http_status = 422
     code = "ERR_PAYMENT_REFUND_NOT_ALLOWED"
+
+
+class DisputeNotFoundError(DomainError):
+    """No dispute matches the given identifier."""
+
+    http_status = 404
+    code = "ERR_PAYMENT_DISPUTE_NOT_FOUND"

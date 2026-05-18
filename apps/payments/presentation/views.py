@@ -14,18 +14,22 @@ from rest_framework.views import APIView
 
 from apps.common.api.responses import created_response, error_response, success_response
 from apps.common.health import check_database, check_rabbitmq, check_redis
+from apps.payments.application.use_cases.create_dispute import CreateDisputeUseCase
 from apps.payments.application.use_cases.create_order import CreatePaymentOrderUseCase
 from apps.payments.application.use_cases.create_promo_code import CreatePromoCodeUseCase
 from apps.payments.application.use_cases.get_order import GetOrderUseCase
+from apps.payments.application.use_cases.list_disputes import ListDisputesUseCase
 from apps.payments.application.use_cases.list_my_orders import ListMyOrdersUseCase
 from apps.payments.application.use_cases.list_promo_codes import ListPromoCodesUseCase
 from apps.payments.application.use_cases.process_to_processing import TransitionToProcessingUseCase
 from apps.payments.application.use_cases.process_webhook import ProcessWebhookUseCase
 from apps.payments.application.use_cases.request_refund import RequestRefundUseCase
+from apps.payments.application.use_cases.update_dispute_status import UpdateDisputeStatusUseCase
 from apps.payments.application.use_cases.validate_promo_code import ValidatePromoCodeUseCase
-from apps.payments.domain.exceptions import InvalidPromoCodeError
+from apps.payments.domain.exceptions import DisputeNotFoundError, InvalidPromoCodeError
 from apps.payments.infrastructure.publisher import publish_event
 from apps.payments.infrastructure.repositories import (
+    DjangoDisputeRepository,
     DjangoPaymentOrderRepository,
     DjangoPromoCodeRepository,
     DjangoRefundRepository,
@@ -35,14 +39,17 @@ from apps.payments.infrastructure.webhook_verify import (
     verify_khalti_signature,
 )
 from apps.payments.presentation.serializers import (
+    CreateDisputeSerializer,
     CreateOrderSerializer,
     CreatePromoCodeSerializer,
+    DisputeResponseSerializer,
     EsewaWebhookSerializer,
     KhaltiWebhookSerializer,
     PaymentOrderResponseSerializer,
     PromoCodeResponseSerializer,
     RefundResponseSerializer,
     RequestRefundSerializer,
+    UpdateDisputeStatusSerializer,
 )
 
 _IS_AUTH = IsAuthenticated
@@ -55,9 +62,13 @@ _REFUND_UC = RequestRefundUseCase
 _ORDER_REPO = DjangoPaymentOrderRepository
 _PROMO_REPO = DjangoPromoCodeRepository
 _REFUND_REPO = DjangoRefundRepository
+_DISPUTE_REPO = DjangoDisputeRepository
 _VALIDATE_PROMO_UC = ValidatePromoCodeUseCase
 _CREATE_PROMO_UC = CreatePromoCodeUseCase
 _LIST_PROMOS_UC = ListPromoCodesUseCase
+_CREATE_DISPUTE_UC = CreateDisputeUseCase
+_LIST_DISPUTES_UC = ListDisputesUseCase
+_UPDATE_DISPUTE_UC = UpdateDisputeStatusUseCase
 _CREATE_ORDER_SER = CreateOrderSerializer
 _ORDER_RESP_SER = PaymentOrderResponseSerializer
 _REFUND_RESP_SER = RefundResponseSerializer
@@ -459,3 +470,79 @@ class ValidatePromoCodeView(APIView):
                 request=request,
             )
         return success_response(PromoCodeResponseSerializer(promo).data, request=request)
+
+
+class DisputeListCreateView(APIView):
+    """GET/POST /orders/{order_id}/disputes/ - list or open a dispute."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Disputes"],
+        summary="List disputes for an order",
+        responses={200: DisputeResponseSerializer(many=True)},
+    )
+    def get(self, request: Request, order_id: uuid.UUID) -> Response:
+        """Return all disputes filed by this user for the given order."""
+        disputes = _LIST_DISPUTES_UC(_DISPUTE_REPO()).execute(
+            order_id=order_id,
+            user_id=_UUID(str(request.user.id)),
+        )
+        return success_response(
+            DisputeResponseSerializer(disputes, many=True).data, request=request
+        )
+
+    @extend_schema(
+        tags=["Disputes"],
+        summary="Open a dispute",
+        request=CreateDisputeSerializer,
+        responses={
+            201: DisputeResponseSerializer,
+            404: OpenApiResponse(description="Order not found."),
+        },
+    )
+    def post(self, request: Request, order_id: uuid.UUID) -> Response:
+        """Open a new dispute against the given order."""
+        ser = CreateDisputeSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+        dispute = _CREATE_DISPUTE_UC(_ORDER_REPO(), _DISPUTE_REPO()).execute(
+            order_id=order_id,
+            user_id=_UUID(str(request.user.id)),
+            reason=d["reason"],
+            description=d["description"],
+            evidence=d.get("evidence", {}),
+        )
+        return _CREATED(DisputeResponseSerializer(dispute).data, request=request)
+
+
+class DisputeDetailView(APIView):
+    """PATCH /disputes/{dispute_id}/ - advance dispute lifecycle (admin)."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Disputes"],
+        summary="Update dispute status",
+        request=UpdateDisputeStatusSerializer,
+        responses={
+            200: DisputeResponseSerializer,
+            404: OpenApiResponse(description="Dispute not found."),
+        },
+    )
+    def patch(self, request: Request, dispute_id: uuid.UUID) -> Response:
+        """Update the status of a dispute (admin action)."""
+        ser = UpdateDisputeStatusSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+        try:
+            dispute = _UPDATE_DISPUTE_UC(_DISPUTE_REPO()).execute(
+                dispute_id=dispute_id,
+                new_status=d["status"],
+                resolution_notes=d.get("resolution_notes", ""),
+            )
+        except DisputeNotFoundError as exc:
+            return error_response(
+                code=exc.code, message=str(exc), http_status=404, request=request
+            )
+        return success_response(DisputeResponseSerializer(dispute).data, request=request)

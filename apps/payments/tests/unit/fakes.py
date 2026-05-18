@@ -7,9 +7,19 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Sequence
 
-from apps.payments.domain.entities import PaymentOrderEntity, PromoCodeEntity, RefundEntity
-from apps.payments.domain.exceptions import InvalidPromoCodeError, OrderNotFoundError
+from apps.payments.domain.entities import (
+    DisputeEntity,
+    PaymentOrderEntity,
+    PromoCodeEntity,
+    RefundEntity,
+)
+from apps.payments.domain.exceptions import (
+    DisputeNotFoundError,
+    InvalidPromoCodeError,
+    OrderNotFoundError,
+)
 from apps.payments.domain.repositories import (
+    IDisputeRepository,
     IPaymentOrderRepository,
     IPromoCodeRepository,
     IRefundRepository,
@@ -165,3 +175,58 @@ class FakePromoCodeRepository(IPromoCodeRepository):
     def list_all(self) -> list[PromoCodeEntity]:
         """Return all stored promo codes."""
         return list(self._store.values())
+
+
+def make_dispute(**kwargs: object) -> DisputeEntity:
+    """Build a DisputeEntity with sensible defaults for testing."""
+    now = _now()
+    defaults: dict = {
+        "id": uuid.uuid4(),
+        "order_id": uuid.uuid4(),
+        "user_id": uuid.uuid4(),
+        "status": "open",
+        "reason": "duplicate",
+        "description": "Test dispute description.",
+        "evidence": {},
+        "gateway_dispute_id": "",
+        "resolved_at": None,
+        "created_at": now,
+        "updated_at": now,
+    }
+    defaults.update(kwargs)
+    return DisputeEntity(**defaults)  # type: ignore[arg-type]
+
+
+class FakeDisputeRepository(IDisputeRepository):
+    """In-memory dispute store."""
+
+    def __init__(self, disputes: "list[DisputeEntity] | None" = None) -> None:
+        self._store: dict[uuid.UUID, DisputeEntity] = {
+            d.id: d for d in (disputes or [])
+        }
+
+    def create(self, entity: DisputeEntity) -> DisputeEntity:
+        """Persist and return the entity."""
+        self._store[entity.id] = entity
+        return entity
+
+    def get_by_id(self, dispute_id: uuid.UUID) -> DisputeEntity:
+        """Raise DisputeNotFoundError if absent."""
+        entity = self._store.get(dispute_id)
+        if entity is None:
+            raise DisputeNotFoundError("Dispute not found.")
+        return entity
+
+    def list_by_order(
+        self, order_id: uuid.UUID, user_id: uuid.UUID
+    ) -> list[DisputeEntity]:
+        """Return disputes for the given order owned by this user."""
+        return [
+            d for d in self._store.values()
+            if d.order_id == order_id and d.user_id == user_id
+        ]
+
+    def update(self, entity: DisputeEntity) -> DisputeEntity:
+        """Overwrite the stored entity and return it."""
+        self._store[entity.id] = entity
+        return entity

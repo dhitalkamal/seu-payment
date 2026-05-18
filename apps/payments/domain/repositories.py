@@ -5,7 +5,12 @@ from __future__ import annotations
 import uuid
 from abc import ABC, abstractmethod
 
-from apps.payments.domain.entities import PaymentOrderEntity, PromoCodeEntity, RefundEntity
+from apps.payments.domain.entities import (
+    DisputeEntity,
+    PaymentOrderEntity,
+    PromoCodeEntity,
+    RefundEntity,
+)
 
 
 class IPaymentOrderRepository(ABC):
@@ -57,3 +62,21 @@ class IPromoCodeRepository(ABC):
 
     @abstractmethod
     def list_all(self) -> list[PromoCodeEntity]: ...
+
+
+class IDisputeRepository(ABC):
+    """Persistence contract for Dispute records."""
+
+    @abstractmethod
+    def create(self, entity: DisputeEntity) -> DisputeEntity: ...
+
+    @abstractmethod
+    def get_by_id(self, dispute_id: uuid.UUID) -> DisputeEntity: ...
+
+    @abstractmethod
+    def list_by_order(
+        self, order_id: uuid.UUID, user_id: uuid.UUID
+    ) -> list[DisputeEntity]: ...
+
+    @abstractmethod
+    def update(self, entity: DisputeEntity) -> DisputeEntity: ...

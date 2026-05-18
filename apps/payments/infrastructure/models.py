@@ -7,7 +7,12 @@ from decimal import Decimal
 
 from django.db import models
 
-from apps.payments.domain.entities import PaymentOrderEntity, PromoCodeEntity, RefundEntity
+from apps.payments.domain.entities import (
+    DisputeEntity,
+    PaymentOrderEntity,
+    PromoCodeEntity,
+    RefundEntity,
+)
 
 
 class PaymentOrder(models.Model):
@@ -214,6 +219,7 @@ class Dispute(models.Model):
     order = models.ForeignKey(
         PaymentOrder, on_delete=models.CASCADE, related_name="disputes"
     )
+    user_id = models.UUIDField()
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
     reason = models.CharField(max_length=30, choices=Reason.choices, default=Reason.OTHER)
     description = models.TextField()
@@ -222,3 +228,34 @@ class Dispute(models.Model):
     resolved_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def to_entity(self) -> DisputeEntity:
+        """Map this ORM row to a pure-Python DisputeEntity."""
+        return DisputeEntity(
+            id=self.id,
+            order_id=self.order_id,
+            user_id=self.user_id,
+            status=self.status,
+            reason=self.reason,
+            description=self.description,
+            evidence=self.evidence,
+            gateway_dispute_id=self.gateway_dispute_id,
+            resolved_at=self.resolved_at,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
+
+    @classmethod
+    def from_entity(cls, entity: DisputeEntity) -> "Dispute":
+        """Build an unsaved ORM instance from a DisputeEntity."""
+        return cls(
+            id=entity.id,
+            order_id=entity.order_id,
+            user_id=entity.user_id,
+            status=entity.status,
+            reason=entity.reason,
+            description=entity.description,
+            evidence=entity.evidence,
+            gateway_dispute_id=entity.gateway_dispute_id,
+            resolved_at=entity.resolved_at,
+        )
