@@ -22,9 +22,7 @@ def verify_khalti_signature(payload_bytes: bytes, received_signature: str) -> bo
     if not secret:
         logger.warning("KHALTI_WEBHOOK_SECRET not set — skipping signature check (dev mode).")
         return True
-    expected = hmac.new(
-        secret.encode("utf-8"), payload_bytes, hashlib.sha256
-    ).hexdigest()
+    expected = hmac.new(secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, received_signature)
 
 
@@ -39,7 +37,5 @@ def verify_esewa_signature(payload_bytes: bytes, received_signature: str) -> boo
     if not secret:
         logger.warning("ESEWA_WEBHOOK_SECRET not set — skipping signature check (dev mode).")
         return True
-    expected = hmac.new(
-        secret.encode("utf-8"), payload_bytes, hashlib.sha256
-    ).hexdigest()
+    expected = hmac.new(secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, received_signature)

@@ -31,9 +31,7 @@ def test_transition_to_processing_updates_status():
     """TransitionToProcessingUseCase sets order status to processing."""
     repo = FakePaymentOrderRepository()
     order_id = _make_order_via_use_case(repo)
-    result = TransitionToProcessingUseCase(repo).execute(
-        order_id=uuid.UUID(order_id)
-    )
+    result = TransitionToProcessingUseCase(repo).execute(order_id=uuid.UUID(order_id))
     assert result.status == "processing"
 
 

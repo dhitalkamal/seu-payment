@@ -132,18 +132,36 @@ class FakeRefundRepository(IRefundRepository):
 
 
 class FakePromoCodeRepository(IPromoCodeRepository):
-    """Returns a single pre-configured PromoCodeEntity or raises InvalidPromoCodeError."""
+    """In-memory promo code store. Accepts a single entity, a list, or None."""
 
-    def __init__(self, promo: PromoCodeEntity | None = None) -> None:
-        self._promo = promo
+    def __init__(
+        self, promos: "PromoCodeEntity | list[PromoCodeEntity] | None" = None
+    ) -> None:
+        if isinstance(promos, list):
+            items: list[PromoCodeEntity] = promos
+        elif promos is not None:
+            items = [promos]
+        else:
+            items = []
+        self._store: dict[str, PromoCodeEntity] = {p.code.upper(): p for p in items}
         self.incremented: list[uuid.UUID] = []
 
     def get_by_code(self, code: str) -> PromoCodeEntity:
         """Return the promo if the code matches case-insensitively."""
-        if self._promo is None or self._promo.code.upper() != code.upper():
+        promo = self._store.get(code.upper())
+        if promo is None:
             raise InvalidPromoCodeError("Promo code not found.")
-        return self._promo
+        return promo
 
     def increment_usage(self, promo_id: uuid.UUID) -> None:
         """Record that usage was incremented for this promo."""
         self.incremented.append(promo_id)
+
+    def create(self, entity: PromoCodeEntity) -> PromoCodeEntity:
+        """Store a new promo code."""
+        self._store[entity.code.upper()] = entity
+        return entity
+
+    def list_all(self) -> list[PromoCodeEntity]:
+        """Return all stored promo codes."""
+        return list(self._store.values())
