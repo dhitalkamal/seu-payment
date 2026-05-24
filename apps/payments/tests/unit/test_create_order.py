@@ -41,7 +41,7 @@ def _defaults(**overrides: object) -> dict:
 
 def test_create_order_correct_fees():
     """Platform fee is 5% of subtotal and total equals subtotal plus platform fee."""
-    result = _uc().execute(**_defaults(subtotal=Decimal("1000.00")))
+    result, _ = _uc().execute(**_defaults(subtotal=Decimal("1000.00")))
     assert result.platform_fee == Decimal("50.00")
     assert result.total_amount == Decimal("1050.00")
     assert result.discount_amount == Decimal("0.00")
@@ -52,7 +52,7 @@ def test_create_order_idempotency_returns_existing():
     """Reusing the same idempotency_key returns the existing order unchanged."""
     key = uuid.uuid4()
     existing = make_order(idempotency_key=key)
-    result = _uc(orders=[existing]).execute(**_defaults(idempotency_key=key))
+    result, _ = _uc(orders=[existing]).execute(**_defaults(idempotency_key=key))
     assert result.id == existing.id
 
 
@@ -67,7 +67,7 @@ def test_create_order_duplicate_registration_raises():
 def test_create_order_percentage_promo_applies():
     """A 10% promo on 1000 gives discount=100, platform_fee=50, total=950."""
     promo = make_promo(discount_type="percentage", discount_value=Decimal("10"))
-    result = _uc(promo=promo).execute(**_defaults(promo_code="SAVE10"))
+    result, _ = _uc(promo=promo).execute(**_defaults(promo_code="SAVE10"))
     assert result.discount_amount == Decimal("100.00")
     assert result.platform_fee == Decimal("50.00")
     assert result.total_amount == Decimal("950.00")
@@ -90,5 +90,5 @@ def test_create_order_exhausted_promo_raises():
 def test_create_order_fee_formula():
     """total_amount always equals subtotal minus discount_amount plus platform_fee."""
     subtotal = Decimal("2000.00")
-    result = _uc().execute(**_defaults(subtotal=subtotal))
+    result, _ = _uc().execute(**_defaults(subtotal=subtotal))
     assert result.total_amount == result.subtotal - result.discount_amount + result.platform_fee
