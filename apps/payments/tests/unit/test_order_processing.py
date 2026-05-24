@@ -12,7 +12,7 @@ from apps.payments.tests.unit.fakes import FakePaymentOrderRepository, FakePromo
 
 def _make_order_via_use_case(order_repo: FakePaymentOrderRepository) -> str:
     """Create an order and return its ID."""
-    result = CreatePaymentOrderUseCase(
+    order, _ = CreatePaymentOrderUseCase(
         order_repo=order_repo,
         promo_repo=FakePromoCodeRepository(None),
     ).execute(
@@ -24,7 +24,7 @@ def _make_order_via_use_case(order_repo: FakePaymentOrderRepository) -> str:
         idempotency_key=uuid.uuid4(),
         promo_code=None,
     )
-    return str(result.id)
+    return str(order.id)
 
 
 def test_transition_to_processing_updates_status():
