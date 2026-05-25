@@ -92,10 +92,7 @@ class DjangoPaymentOrderRepository(IPaymentOrderRepository):
 
     def list_by_user(self, user_id: object) -> list[PaymentOrderEntity]:
         """Return all orders for this user ordered newest first."""
-        return [
-            obj.to_entity()
-            for obj in PaymentOrder.objects.filter(user_id=user_id).order_by("-created_at")
-        ]
+        return [obj.to_entity() for obj in PaymentOrder.objects.filter(user_id=user_id).order_by("-created_at")]
 
 
 class DjangoRefundRepository(IRefundRepository):
@@ -149,16 +146,9 @@ class DjangoDisputeRepository(IDisputeRepository):
         except Dispute.DoesNotExist:
             raise DisputeNotFoundError("Dispute not found.")
 
-    def list_by_order(
-        self, order_id: uuid.UUID, user_id: uuid.UUID
-    ) -> list[DisputeEntity]:
+    def list_by_order(self, order_id: uuid.UUID, user_id: uuid.UUID) -> list[DisputeEntity]:
         """Return disputes for the given order scoped to the user."""
-        return [
-            obj.to_entity()
-            for obj in Dispute.objects.filter(
-                order_id=order_id, user_id=user_id
-            ).order_by("-created_at")
-        ]
+        return [obj.to_entity() for obj in Dispute.objects.filter(order_id=order_id, user_id=user_id).order_by("-created_at")]
 
     def update(self, entity: DisputeEntity) -> DisputeEntity:
         """Update mutable dispute fields and return the saved entity."""
@@ -171,10 +161,7 @@ class DjangoDisputeRepository(IDisputeRepository):
 
     def list_all(self) -> list[DisputeEntity]:
         """Return all disputes platform-wide, newest first."""
-        return [
-            obj.to_entity()
-            for obj in Dispute.objects.all().order_by("-created_at")
-        ]
+        return [obj.to_entity() for obj in Dispute.objects.all().order_by("-created_at")]
 
 
 # * ---- Subscription repositories ----
@@ -206,9 +193,7 @@ class DjangoSubscriptionRepository(ISubscriptionRepository):
     def get_by_gateway_id(self, gateway_subscription_id: str) -> SubscriptionEntity | None:
         """Lookup by gateway subscription ID for webhook matching."""
         try:
-            return Subscription.objects.get(
-                gateway_subscription_id=gateway_subscription_id
-            ).to_entity()
+            return Subscription.objects.get(gateway_subscription_id=gateway_subscription_id).to_entity()
         except Subscription.DoesNotExist:
             return None
 
@@ -226,17 +211,11 @@ class DjangoSubscriptionRepository(ISubscriptionRepository):
 
     def list_by_org(self, org_id: uuid.UUID) -> list[SubscriptionEntity]:
         """Return all subscriptions for an org, newest first."""
-        return [
-            obj.to_entity()
-            for obj in Subscription.objects.filter(org_id=org_id).order_by("-created_at")
-        ]
+        return [obj.to_entity() for obj in Subscription.objects.filter(org_id=org_id).order_by("-created_at")]
 
     def list_all(self) -> list[SubscriptionEntity]:
         """Return every subscription across all orgs, newest first."""
-        return [
-            obj.to_entity()
-            for obj in Subscription.objects.all().order_by("-created_at")
-        ]
+        return [obj.to_entity() for obj in Subscription.objects.all().order_by("-created_at")]
 
 
 class DjangoSubscriptionPaymentRepository(ISubscriptionPaymentRepository):
@@ -250,9 +229,4 @@ class DjangoSubscriptionPaymentRepository(ISubscriptionPaymentRepository):
 
     def list_by_subscription(self, sub_id: uuid.UUID) -> list[SubscriptionPaymentEntity]:
         """Return payment records for a subscription, newest first."""
-        return [
-            obj.to_entity()
-            for obj in SubscriptionPayment.objects.filter(
-                subscription_id=sub_id
-            ).order_by("-paid_at")
-        ]
+        return [obj.to_entity() for obj in SubscriptionPayment.objects.filter(subscription_id=sub_id).order_by("-paid_at")]

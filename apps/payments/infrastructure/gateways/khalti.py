@@ -48,14 +48,16 @@ class KhaltiGateway(IPaymentGateway):
         # ! amount must be integer paisa — Khalti rejects decimals
         amount_paisa = int(amount * _PAISA_MULTIPLIER)
 
-        payload = json.dumps({
-            "return_url": return_url,
-            "website_url": settings.KHALTI_WEBSITE_URL,
-            "amount": amount_paisa,
-            "purchase_order_id": order_id,
-            "purchase_order_name": description[:256],
-            "customer_info": {"email": customer_email},
-        }).encode("utf-8")
+        payload = json.dumps(
+            {
+                "return_url": return_url,
+                "website_url": settings.KHALTI_WEBSITE_URL,
+                "amount": amount_paisa,
+                "purchase_order_id": order_id,
+                "purchase_order_name": description[:256],
+                "customer_info": {"email": customer_email},
+            }
+        ).encode("utf-8")
 
         req = Request(
             api_url,

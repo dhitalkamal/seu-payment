@@ -55,19 +55,21 @@ class StripeGateway(IPaymentGateway):
         # * Stripe REST API uses form-encoded params
         import urllib.parse
 
-        params = urllib.parse.urlencode([
-            ("payment_method_types[]", "card"),
-            ("mode", "payment"),
-            ("success_url", f"{return_url}?session_id={{CHECKOUT_SESSION_ID}}"),
-            ("cancel_url", cancel_url),
-            ("customer_email", customer_email),
-            ("client_reference_id", order_id),
-            ("line_items[0][price_data][currency]", stripe_currency),
-            ("line_items[0][price_data][product_data][name]", description[:256]),
-            ("line_items[0][price_data][unit_amount]", str(amount_minor)),
-            ("line_items[0][quantity]", "1"),
-            ("metadata[order_id]", order_id),
-        ]).encode("utf-8")
+        params = urllib.parse.urlencode(
+            [
+                ("payment_method_types[]", "card"),
+                ("mode", "payment"),
+                ("success_url", f"{return_url}?session_id={{CHECKOUT_SESSION_ID}}"),
+                ("cancel_url", cancel_url),
+                ("customer_email", customer_email),
+                ("client_reference_id", order_id),
+                ("line_items[0][price_data][currency]", stripe_currency),
+                ("line_items[0][price_data][product_data][name]", description[:256]),
+                ("line_items[0][price_data][unit_amount]", str(amount_minor)),
+                ("line_items[0][quantity]", "1"),
+                ("metadata[order_id]", order_id),
+            ]
+        ).encode("utf-8")
 
         req = Request(
             _API_URL,

@@ -27,9 +27,7 @@ def test_refund_creates_pending_refund():
     """Successful refund returns a RefundEntity with status=pending."""
     user_id = uuid.uuid4()
     order = make_order(user_id=user_id, status="completed")
-    result = _uc(orders=[order]).execute(
-        order_id=order.id, user_id=user_id, reason="Changed my mind"
-    )
+    result = _uc(orders=[order]).execute(order_id=order.id, user_id=user_id, reason="Changed my mind")
     assert result.status == "pending"
     assert result.order_id == order.id
     assert result.amount == order.total_amount
@@ -40,9 +38,7 @@ def test_refund_sets_order_to_refunded():
     user_id = uuid.uuid4()
     order = make_order(user_id=user_id, status="completed")
     repo = FakePaymentOrderRepository([order])
-    RequestRefundUseCase(order_repo=repo, refund_repo=FakeRefundRepository()).execute(
-        order_id=order.id, user_id=user_id, reason="Event cancelled"
-    )
+    RequestRefundUseCase(order_repo=repo, refund_repo=FakeRefundRepository()).execute(order_id=order.id, user_id=user_id, reason="Event cancelled")
     updated = repo.get_by_id(order.id, user_id)
     assert updated.status == "refunded"
 

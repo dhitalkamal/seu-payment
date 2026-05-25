@@ -52,7 +52,7 @@ class CreateSubscriptionUseCase:
         For paid plans (starter/pro/enterprise), the gateway is called and the subscription
         stays in 'active' pending confirmation — the webhook will record the payment.
 
-        @param org_id - UUID of the organisation
+        @param org_id - UUID of the organization
         @param plan - one of starter, pro, ngo, enterprise
         @param gateway - khalti | esewa | stripe | paypal
         @param return_url - where the gateway redirects on success
@@ -68,9 +68,7 @@ class CreateSubscriptionUseCase:
         # ! block duplicate active subscriptions
         existing = self._subs.get_active_by_org(org_id)
         if existing is not None:
-            raise ActiveSubscriptionExistsError(
-                "This organisation already has an active subscription. Cancel it first."
-            )
+            raise ActiveSubscriptionExistsError("This organization already has an active subscription. Cancel it first.")
 
         now = datetime.now(timezone.utc)
         period_end = now + timedelta(days=BILLING_PERIOD_DAYS)

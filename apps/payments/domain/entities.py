@@ -83,7 +83,7 @@ class PromoCodeEntity:
 
 @dataclass(slots=True)
 class SubscriptionEntity:
-    """An organisation's subscription to a platform plan."""
+    """An organization's subscription to a platform plan."""
 
     id: uuid.UUID
     org_id: uuid.UUID

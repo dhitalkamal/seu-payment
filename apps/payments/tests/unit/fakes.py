@@ -144,9 +144,7 @@ class FakeRefundRepository(IRefundRepository):
 class FakePromoCodeRepository(IPromoCodeRepository):
     """In-memory promo code store. Accepts a single entity, a list, or None."""
 
-    def __init__(
-        self, promos: "PromoCodeEntity | list[PromoCodeEntity] | None" = None
-    ) -> None:
+    def __init__(self, promos: "PromoCodeEntity | list[PromoCodeEntity] | None" = None) -> None:
         if isinstance(promos, list):
             items: list[PromoCodeEntity] = promos
         elif promos is not None:
@@ -201,9 +199,7 @@ class FakeDisputeRepository(IDisputeRepository):
     """In-memory dispute store."""
 
     def __init__(self, disputes: "list[DisputeEntity] | None" = None) -> None:
-        self._store: dict[uuid.UUID, DisputeEntity] = {
-            d.id: d for d in (disputes or [])
-        }
+        self._store: dict[uuid.UUID, DisputeEntity] = {d.id: d for d in (disputes or [])}
 
     def create(self, entity: DisputeEntity) -> DisputeEntity:
         """Persist and return the entity."""
@@ -217,14 +213,9 @@ class FakeDisputeRepository(IDisputeRepository):
             raise DisputeNotFoundError("Dispute not found.")
         return entity
 
-    def list_by_order(
-        self, order_id: uuid.UUID, user_id: uuid.UUID
-    ) -> list[DisputeEntity]:
+    def list_by_order(self, order_id: uuid.UUID, user_id: uuid.UUID) -> list[DisputeEntity]:
         """Return disputes for the given order owned by this user."""
-        return [
-            d for d in self._store.values()
-            if d.order_id == order_id and d.user_id == user_id
-        ]
+        return [d for d in self._store.values() if d.order_id == order_id and d.user_id == user_id]
 
     def update(self, entity: DisputeEntity) -> DisputeEntity:
         """Overwrite the stored entity and return it."""

@@ -24,12 +24,12 @@ class CancelSubscriptionUseCase:
         The org keeps their plan features until current_period_end, then the
         management service consumer will revert them to free.
 
-        @param org_id - UUID of the organisation
+        @param org_id - UUID of the organization
         @raises SubscriptionNotFoundError if no active subscription exists
         """
         sub = self._subs.get_active_by_org(org_id)
         if sub is None:
-            raise SubscriptionNotFoundError("No active subscription found for this organisation.")
+            raise SubscriptionNotFoundError("No active subscription found for this organization.")
 
         sub.status = "cancelled"
         sub.cancelled_at = datetime.now(timezone.utc)
