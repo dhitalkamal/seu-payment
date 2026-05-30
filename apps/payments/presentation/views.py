@@ -30,6 +30,7 @@ from apps.payments.application.use_cases.request_refund import RequestRefundUseC
 from apps.payments.application.use_cases.update_dispute_status import UpdateDisputeStatusUseCase
 from apps.payments.application.use_cases.validate_promo_code import ValidatePromoCodeUseCase
 from apps.payments.domain.exceptions import DisputeNotFoundError, InvalidPromoCodeError
+from apps.payments.infrastructure.audit_publisher import publish_audit
 from apps.payments.infrastructure.gateways import get_gateway
 from apps.payments.infrastructure.publisher import publish_event
 from apps.payments.infrastructure.repositories import (
@@ -293,6 +294,16 @@ class CreateOrderView(APIView):
             if gateway_name == "esewa" and "form_data" in session.raw_response:
                 resp_data["esewa_form_data"] = session.raw_response["form_data"]
                 resp_data["esewa_form_url"] = session.raw_response["form_url"]
+        publish_audit(
+            request=request,
+            user_id=_UUID(str(request.user.id)),
+            event_type="order.created",
+            metadata={
+                "event_id": str(d["event_id"]),
+                "gateway": gateway_name,
+                "subtotal": str(d["subtotal"]),
+            },
+        )
         return _CREATED(resp_data, request=request)
 
 
@@ -337,6 +348,15 @@ class RequestRefundView(APIView):
             user_id=_UUID(str(request.user.id)),
             amount=d["amount"],
             reason=d["reason"],
+        )
+        publish_audit(
+            request=request,
+            user_id=_UUID(str(request.user.id)),
+            event_type="refund.requested",
+            metadata={
+                "order_id": str(d["order_id"]),
+                "reason": d["reason"],
+            },
         )
         return _CREATED(_REFUND_RESP_SER(result).data, request=request)
 
@@ -404,6 +424,12 @@ class KhaltiWebhookView(APIView):
                 routing_key="payment.order.completed",
                 payload=_order_completed_payload(order),
             )
+            publish_audit(
+                request=request,
+                user_id=_UUID(str(order.user_id)),
+                event_type="order.completed",
+                metadata={"gateway": "khalti"},
+            )
         return success_response({"received": True}, request=request)
 
 
@@ -446,6 +472,12 @@ class EsewaWebhookView(APIView):
             publish_event(
                 routing_key="payment.order.completed",
                 payload=_order_completed_payload(order),
+            )
+            publish_audit(
+                request=request,
+                user_id=_UUID(str(order.user_id)),
+                event_type="order.completed",
+                metadata={"gateway": "esewa"},
             )
         return success_response({"received": True}, request=request)
 
@@ -490,6 +522,12 @@ class StripeWebhookView(APIView):
                 publish_event(
                     routing_key="payment.order.completed",
                     payload=_order_completed_payload(order),
+                )
+                publish_audit(
+                    request=request,
+                    user_id=_UUID(str(order.user_id)),
+                    event_type="order.completed",
+                    metadata={"gateway": "stripe"},
                 )
         elif event_type in ("checkout.session.expired", "checkout.session.async_payment_failed"):
             session_obj = event_data.get("data", {}).get("object", {})
@@ -550,6 +588,12 @@ class PayPalWebhookView(APIView):
             publish_event(
                 routing_key="payment.order.completed",
                 payload=_order_completed_payload(order),
+            )
+            publish_audit(
+                request=request,
+                user_id=_UUID(str(order.user_id)),
+                event_type="order.completed",
+                metadata={"gateway": "paypal"},
             )
         return success_response(
             {"captured": internal_status == "completed", "order_id": str(order.id)},
@@ -708,6 +752,15 @@ class SubscriptionCreateView(APIView):
             if gateway_name == "esewa" and "form_data" in session.raw_response:
                 resp_data["esewa_form_data"] = session.raw_response["form_data"]
                 resp_data["esewa_form_url"] = session.raw_response["form_url"]
+        publish_audit(
+            request=request,
+            user_id=_UUID(str(request.user.id)),
+            event_type="subscription.created",
+            metadata={
+                "org_id": str(d["org_id"]),
+                "plan": d["plan"],
+            },
+        )
         return _CREATED(resp_data, request=request)
 
 
@@ -739,12 +792,7 @@ class SubscriptionCurrentView(APIView):
 
         sub = DjangoSubscriptionRepository().get_active_by_org(_UUID(org_id))
         if sub is None:
-            return error_response(
-                code="ERR_PAYMENT_SUBSCRIPTION_NOT_FOUND",
-                message="No active subscription for this organization.",
-                http_status=404,
-                request=request,
-            )
+            return success_response(None, request=request)
         return success_response(SubscriptionResponseSerializer(sub).data, request=request)
 
 
@@ -773,6 +821,14 @@ class SubscriptionCancelView(APIView):
             sub_repo=DjangoSubscriptionRepository(),
         ).execute(org_id=ser.validated_data["org_id"])
 
+        publish_audit(
+            request=request,
+            user_id=_UUID(str(request.user.id)),
+            event_type="subscription.cancelled",
+            metadata={
+                "org_id": str(ser.validated_data["org_id"]),
+            },
+        )
         return success_response(SubscriptionResponseSerializer(sub).data, request=request)
 
 
@@ -836,6 +892,14 @@ class PromoCodeListCreateView(APIView):
             valid_from=d["valid_from"],
             valid_until=d["valid_until"],
             max_usage_count=d.get("max_usage_count", 0),
+        )
+        publish_audit(
+            request=request,
+            user_id=_UUID(str(request.user.id)),
+            event_type="promo.created",
+            metadata={
+                "code": d["code"],
+            },
         )
         return _CREATED(PromoCodeResponseSerializer(promo).data, request=request)
 
@@ -907,6 +971,14 @@ class DisputeListCreateView(APIView):
             description=d["description"],
             evidence=d.get("evidence", {}),
         )
+        publish_audit(
+            request=request,
+            user_id=_UUID(str(request.user.id)),
+            event_type="dispute.created",
+            metadata={
+                "reason": d["reason"],
+            },
+        )
         return _CREATED(DisputeResponseSerializer(dispute).data, request=request)
 
 
@@ -937,6 +1009,14 @@ class DisputeDetailView(APIView):
             )
         except DisputeNotFoundError as exc:
             return error_response(code=exc.code, message=str(exc), http_status=404, request=request)
+        publish_audit(
+            request=request,
+            user_id=_UUID(str(request.user.id)),
+            event_type="dispute.updated",
+            metadata={
+                "status": d["status"],
+            },
+        )
         return success_response(DisputeResponseSerializer(dispute).data, request=request)
 
 
