@@ -17,6 +17,7 @@ dependencies = [
     "drf-spectacular",
     "celery[redis]>=5.4",
     "stripe>=15.1.0",
+    "dj-database-url>=2.0.0",
 ]
 
 [dependency-groups]
@@ -59,9 +60,11 @@ module = [
     "apps.common.api.pagination",
     "apps.common.middleware.request_context",
     "apps.payments.application.use_cases.create_connected_account",
+    "apps.payments.application.use_cases.create_order",
     "apps.payments.application.use_cases.create_payout",
     "apps.payments.infrastructure.gateways.stripe_connect",
     "apps.payments.infrastructure.models",
+    "apps.payments.infrastructure.repositories",
     "apps.payments.presentation.views",
     "apps.payments.tests.unit.test_create_connected_account",
     "apps.payments.tests.unit.test_create_payout",

@@ -18,7 +18,6 @@ from apps.common.permissions import IsOrgAdmin, IsOrgOwner, IsSuperAdminFromAllo
 from apps.payments.application.use_cases.create_connected_account import CreateConnectedAccountUseCase
 from apps.payments.application.use_cases.create_dispute import CreateDisputeUseCase
 from apps.payments.application.use_cases.create_order import CreatePaymentOrderUseCase
-from apps.payments.infrastructure.plan_client import HttpPlanClient
 from apps.payments.application.use_cases.create_payout import CreatePayoutUseCase
 from apps.payments.application.use_cases.create_promo_code import CreatePromoCodeUseCase
 from apps.payments.application.use_cases.get_order import GetOrderUseCase
@@ -33,6 +32,7 @@ from apps.payments.application.use_cases.validate_promo_code import ValidateProm
 from apps.payments.domain.exceptions import DisputeNotFoundError, InvalidPromoCodeError
 from apps.payments.infrastructure.audit_publisher import publish_audit
 from apps.payments.infrastructure.gateways import get_gateway
+from apps.payments.infrastructure.plan_client import HttpPlanClient
 from apps.payments.infrastructure.publisher import publish_event
 from apps.payments.infrastructure.repositories import (
     DjangoConnectedAccountRepository,
@@ -649,7 +649,7 @@ class PaymentCallbackView(APIView):
                             routing_key="payment.order.completed",
                             payload=_order_completed_payload(order),
                         )
-                    success_path = custom_redirect or f"/tickets?payment=success"
+                    success_path = custom_redirect or "/tickets?payment=success"
                     return HttpResponseRedirect(f"{base}{success_path}")
                 except Exception:
                     pass
@@ -677,7 +677,7 @@ class PaymentCallbackView(APIView):
                             routing_key="payment.order.completed",
                             payload=_order_completed_payload(order),
                         )
-                    success_path = custom_redirect or f"/tickets?payment=success"
+                    success_path = custom_redirect or "/tickets?payment=success"
                     return HttpResponseRedirect(f"{base}{success_path}")
                 except Exception:
                     pass
@@ -686,14 +686,33 @@ class PaymentCallbackView(APIView):
         if gateway == "stripe":
             session_id = request.query_params.get("session_id", "")
             if session_id:
-                success_path = custom_redirect or f"/tickets?payment=success"
+                # activate pending subscription if this was a subscription payment
+                try:
+                    from apps.payments.infrastructure.repositories import DjangoSubscriptionRepository
+
+                    sub_repo = DjangoSubscriptionRepository()
+                    sub = sub_repo.get_by_gateway_id(session_id)
+                    if sub and sub.status == "pending":
+                        sub.status = "active"
+                        sub_repo.update(sub)
+                        publish_event(
+                            routing_key="subscription.activated",
+                            payload={
+                                "org_id": str(sub.org_id),
+                                "plan": sub.plan,
+                                "subscription_id": str(sub.id),
+                            },
+                        )
+                except Exception:
+                    pass
+                success_path = custom_redirect or "/tickets?payment=success"
                 return HttpResponseRedirect(f"{base}{success_path}")
             return HttpResponseRedirect(fail_url)
 
         if gateway == "paypal":
             token = request.query_params.get("token", "")
             if token:
-                success_path = custom_redirect or f"/tickets?payment=success"
+                success_path = custom_redirect or "/tickets?payment=success"
                 return HttpResponseRedirect(f"{base}{success_path}")
             return HttpResponseRedirect(fail_url)
 
@@ -874,12 +893,6 @@ class PromoCodeListCreateView(APIView):
     """GET /promo-codes/ - list; POST /promo-codes/ - create."""
 
     permission_classes = [IsAuthenticated]
-
-    def get_permissions(self) -> list:
-        """GET is open to any authenticated user; POST requires org admin role."""
-        if self.request.method == "POST":
-            return [IsOrgAdmin()]
-        return [IsAuthenticated()]
 
     @extend_schema(
         tags=["Promo Codes"],
@@ -1072,6 +1085,112 @@ class AdminOrderListView(APIView):
         """Return every order across all users, not scoped to the requester."""
         results = _ORDER_REPO().list_all()
         return success_response(_ORDER_RESP_SER(results, many=True).data, request=request)
+
+
+class AdminPaymentAnalyticsView(APIView):
+    """GET /admin/analytics/ - platform-wide payment analytics (superadmin only)."""
+
+    permission_classes = [IsSuperAdminFromAllowedIP]
+
+    @extend_schema(
+        tags=["Admin"],
+        summary="Payment analytics (admin)",
+        responses={200: OpenApiResponse(description="Platform payment analytics.")},
+    )
+    def get(self, request: Request) -> Response:
+        """Aggregate payment metrics across the entire platform."""
+        from datetime import timedelta
+
+        from django.db.models import Count, Sum
+        from django.utils import timezone as dj_tz
+
+        from apps.payments.infrastructure.models import PaymentOrder, Refund, Subscription, SubscriptionPayment
+
+        now = dj_tz.now()
+        thirty_days_ago = now - timedelta(days=30)
+
+        # ticket order revenue
+        orders = PaymentOrder.objects.all()
+        completed = orders.filter(status="completed")
+        completed_30d = completed.filter(completed_at__gte=thirty_days_ago)
+
+        ticket_revenue = completed.aggregate(s=Sum("total_amount"))["s"] or 0
+        ticket_revenue_30d = completed_30d.aggregate(s=Sum("total_amount"))["s"] or 0
+        platform_fees = completed.aggregate(s=Sum("platform_fee"))["s"] or 0
+        platform_fees_30d = completed_30d.aggregate(s=Sum("platform_fee"))["s"] or 0
+
+        # subscription revenue
+        active_subs = Subscription.objects.filter(status="active")
+        active_sub_count = active_subs.count()
+        total_subs = Subscription.objects.count()
+        sub_mrr = active_subs.aggregate(s=Sum("amount"))["s"] or 0
+
+        sub_payments = SubscriptionPayment.objects.filter(status="completed")
+        sub_revenue = sub_payments.aggregate(s=Sum("amount"))["s"] or 0
+        sub_revenue_30d = sub_payments.filter(paid_at__gte=thirty_days_ago).aggregate(s=Sum("amount"))["s"] or 0
+
+        # combined revenue = ticket revenue + subscription revenue
+        total_revenue = float(ticket_revenue) + float(sub_revenue) + float(sub_mrr)
+        revenue_30d = float(ticket_revenue_30d) + float(sub_revenue_30d)
+
+        gateway_breakdown = list(completed.values("gateway").annotate(count=Count("id"), total=Sum("total_amount")).order_by("-total"))
+
+        status_breakdown = list(orders.values("status").annotate(count=Count("id")).order_by("-count"))
+
+        refund_count = Refund.objects.count()
+        refund_total = Refund.objects.filter(status="completed").aggregate(s=Sum("amount"))["s"] or 0
+
+        return success_response(
+            {
+                "total_revenue": str(total_revenue),
+                "revenue_30d": str(revenue_30d),
+                "ticket_revenue": str(ticket_revenue),
+                "subscription_revenue": str(float(sub_revenue) + float(sub_mrr)),
+                "subscription_mrr": str(sub_mrr),
+                "platform_fees_total": str(platform_fees),
+                "platform_fees_30d": str(platform_fees_30d),
+                "total_orders": orders.count(),
+                "completed_orders": completed.count(),
+                "failed_orders": orders.filter(status="failed").count(),
+                "gateway_breakdown": [{"gateway": g["gateway"], "count": g["count"], "total": str(g["total"])} for g in gateway_breakdown],
+                "status_breakdown": [{"status": s["status"], "count": s["count"]} for s in status_breakdown],
+                "active_subscriptions": active_sub_count,
+                "total_subscriptions": total_subs,
+                "refund_count": refund_count,
+                "refund_total": str(refund_total),
+            },
+            request=request,
+        )
+
+
+class AdminRefundListView(APIView):
+    """GET /admin/refunds/ - list all refunds (superadmin only)."""
+
+    permission_classes = [IsSuperAdminFromAllowedIP]
+
+    @extend_schema(
+        tags=["Admin"],
+        summary="List all refunds (admin)",
+        responses={200: OpenApiResponse(description="All platform refunds.")},
+    )
+    def get(self, request: Request) -> Response:
+        """Return all refund records across the platform."""
+        from apps.payments.infrastructure.models import Refund
+
+        refunds = Refund.objects.all().order_by("-created_at")[:100]
+        data = [
+            {
+                "id": str(r.id),
+                "order_id": str(r.order_id),
+                "amount": str(r.amount) if r.amount else None,
+                "reason": r.reason,
+                "status": r.status,
+                "gateway": r.gateway,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in refunds
+        ]
+        return success_response(data, request=request)
 
 
 class ConnectedAccountView(APIView):

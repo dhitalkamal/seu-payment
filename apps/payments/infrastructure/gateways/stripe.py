@@ -60,7 +60,7 @@ class StripeGateway(IPaymentGateway):
             [
                 ("payment_method_types[]", "card"),
                 ("mode", "payment"),
-                ("success_url", f"{return_url}?session_id={{CHECKOUT_SESSION_ID}}"),
+                ("success_url", f"{return_url}{'&' if '?' in return_url else '?'}session_id={{CHECKOUT_SESSION_ID}}"),
                 ("cancel_url", cancel_url),
                 ("customer_email", customer_email),
                 ("client_reference_id", order_id),

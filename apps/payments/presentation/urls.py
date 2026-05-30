@@ -6,6 +6,8 @@ from django.urls import URLPattern, path
 
 from .views import (
     AdminOrderListView,
+    AdminPaymentAnalyticsView,
+    AdminRefundListView,
     CreateOrderView,
     DisputeDetailView,
     DisputeListAllView,
@@ -57,6 +59,8 @@ urlpatterns: list[URLPattern] = [
         name="subscription-payments",
     ),
     path("admin/orders/", AdminOrderListView.as_view(), name="admin-orders"),
+    path("admin/analytics/", AdminPaymentAnalyticsView.as_view(), name="admin-payment-analytics"),
+    path("admin/refunds/", AdminRefundListView.as_view(), name="admin-refunds"),
     path("promo-codes/", PromoCodeListCreateView.as_view(), name="promo-code-list-create"),
     path(
         "promo-codes/<str:code>/validate/",

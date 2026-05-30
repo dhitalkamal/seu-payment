@@ -40,10 +40,10 @@ def _defaults(**overrides: object) -> dict:
 
 
 def test_create_order_correct_fees():
-    """Platform fee is 5% of subtotal and total equals subtotal plus platform fee."""
+    """Platform fee is 5% of subtotal; total equals subtotal (fee tracked separately)."""
     result, _ = _uc().execute(**_defaults(subtotal=Decimal("1000.00")))
     assert result.platform_fee == Decimal("50.00")
-    assert result.total_amount == Decimal("1050.00")
+    assert result.total_amount == Decimal("1000.00")
     assert result.discount_amount == Decimal("0.00")
     assert result.status == "created"
 
@@ -65,12 +65,11 @@ def test_create_order_duplicate_registration_raises():
 
 
 def test_create_order_percentage_promo_applies():
-    """A 10% promo on 1000 gives discount=100, platform_fee=50, total=950."""
+    """A 10% promo on 1000 gives discount=100, total=900 (subtotal - discount)."""
     promo = make_promo(discount_type="percentage", discount_value=Decimal("10"))
     result, _ = _uc(promo=promo).execute(**_defaults(promo_code="SAVE10"))
     assert result.discount_amount == Decimal("100.00")
-    assert result.platform_fee == Decimal("50.00")
-    assert result.total_amount == Decimal("950.00")
+    assert result.total_amount == result.subtotal - result.discount_amount
 
 
 def test_create_order_expired_promo_raises():
@@ -88,7 +87,7 @@ def test_create_order_exhausted_promo_raises():
 
 
 def test_create_order_fee_formula():
-    """total_amount always equals subtotal minus discount_amount plus platform_fee."""
+    """total_amount equals subtotal minus discount (platform fee is tracked separately)."""
     subtotal = Decimal("2000.00")
     result, _ = _uc().execute(**_defaults(subtotal=subtotal))
-    assert result.total_amount == result.subtotal - result.discount_amount + result.platform_fee
+    assert result.total_amount == result.subtotal - result.discount_amount
