@@ -234,3 +234,19 @@ class FakeDisputeRepository(IDisputeRepository):
     def list_all(self) -> list[DisputeEntity]:
         """Return all disputes, newest first."""
         return sorted(self._store.values(), key=lambda d: d.created_at, reverse=True)
+
+
+class FakeSubscriptionRepository:
+    def __init__(self):
+        self._subs = []
+        self._active = {}
+
+    def create(self, entity):
+        self._subs.append(entity)
+        return entity
+
+    def update(self, entity):
+        return entity
+
+    def get_active_by_org(self, org_id):
+        return self._active.get(org_id)

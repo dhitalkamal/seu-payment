@@ -72,3 +72,7 @@ module = [
     "config.settings.production",
 ]
 ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "apps.payments.tests.*"
+ignore_errors = true

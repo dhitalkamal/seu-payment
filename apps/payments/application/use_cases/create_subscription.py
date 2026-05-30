@@ -13,6 +13,7 @@ from apps.payments.infrastructure.publisher import publish_event
 
 # ! plan prices in NPR - must stay in sync with PLAN_CATALOGUE on the frontend
 PLAN_PRICES: dict[str, Decimal] = {
+    "free": Decimal("0.00"),
     "starter": Decimal("999.00"),
     "pro": Decimal("4999.00"),
     "ngo": Decimal("0.00"),
@@ -44,58 +45,63 @@ class CreateSubscriptionUseCase:
         cancel_url: str = "",
         customer_email: str = "",
     ) -> tuple[SubscriptionEntity, PaymentSession | None]:
-        """
-        Create a subscription record, call the gateway for payment, return the payment URL.
-
-        For NGO plans (free), the subscription is activated immediately with no payment.
-        For paid plans (starter/pro/enterprise), the gateway is called and the subscription
-        stays in 'active' pending confirmation - the webhook will record the payment.
-
-        @param org_id - UUID of the organization
-        @param plan - one of starter, pro, ngo, enterprise
-        @param gateway - khalti | esewa | stripe | paypal
-        @param return_url - where the gateway redirects on success
-        @param cancel_url - where the gateway redirects on failure
-        @param customer_email - org admin email for gateway display
-        @raises ValueError if the plan name is invalid
-        @raises PaymentGatewayError if the gateway rejects the request
-        """
+        """Create a subscription. Free plans activate immediately. Paid plans call gateway first."""
         if plan not in PLAN_PRICES:
             raise ValueError(f"Invalid subscription plan: {plan}")
 
         now = datetime.now(timezone.utc)
-
-        # auto-cancel existing subscription when switching plans (upgrade/downgrade)
-        existing = self._subs.get_active_by_org(org_id)
-        if existing is not None:
-            existing.status = "cancelled"
-            existing.cancelled_at = now
-            self._subs.update(existing)
-            publish_event(
-                routing_key="subscription.cancelled",
-                payload={"org_id": str(org_id), "plan": existing.plan, "subscription_id": str(existing.id)},
-            )
-        period_end = now + timedelta(days=BILLING_PERIOD_DAYS)
         amount = PLAN_PRICES[plan]
+        existing = self._subs.get_active_by_org(org_id)
 
-        sub = SubscriptionEntity(
-            id=uuid.uuid4(),
-            org_id=org_id,
-            plan=plan,
-            status="active",
-            gateway=gateway,
-            gateway_subscription_id="",
-            amount=amount,
-            currency="NPR",
-            current_period_start=now,
-            current_period_end=period_end,
-            created_at=now,
-            updated_at=now,
-        )
-        sub = self._subs.create(sub)
+        # downgrade to free - just cancel existing, no new subscription needed
+        if plan == "free":
+            if existing is not None:
+                existing.status = "cancelled"
+                existing.cancelled_at = now
+                self._subs.update(existing)
+                publish_event(
+                    routing_key="subscription.cancelled",
+                    payload={"org_id": str(org_id), "plan": existing.plan, "subscription_id": str(existing.id)},
+                )
+            free_sub = SubscriptionEntity(
+                id=uuid.uuid4(),
+                org_id=org_id,
+                plan="free",
+                status="active",
+                gateway="none",
+                gateway_subscription_id="",
+                amount=Decimal("0.00"),
+                currency="NPR",
+                current_period_start=now,
+                current_period_end=now + timedelta(days=36500),
+                created_at=now,
+                updated_at=now,
+            )
+            return free_sub, None
 
-        # * NGO plan is free - activate immediately, no payment needed
+        # free plans (ngo) - activate immediately
         if amount == Decimal("0.00"):
+            if existing is not None:
+                existing.status = "cancelled"
+                existing.cancelled_at = now
+                self._subs.update(existing)
+
+            period_end = now + timedelta(days=BILLING_PERIOD_DAYS)
+            sub = SubscriptionEntity(
+                id=uuid.uuid4(),
+                org_id=org_id,
+                plan=plan,
+                status="active",
+                gateway="none",
+                gateway_subscription_id="",
+                amount=amount,
+                currency="NPR",
+                current_period_start=now,
+                current_period_end=period_end,
+                created_at=now,
+                updated_at=now,
+            )
+            sub = self._subs.create(sub)
             publish_event(
                 routing_key="subscription.activated",
                 payload={
@@ -107,19 +113,47 @@ class CreateSubscriptionUseCase:
             )
             return sub, None
 
-        # * paid plan - call the gateway for payment
-        session: PaymentSession | None = None
-        if self._gateway is not None:
-            session = self._gateway.initiate(
-                order_id=str(sub.id),
-                amount=amount,
-                currency="NPR",
-                description=f"Sansaar {plan.title()} Plan - Monthly",
-                customer_email=customer_email,
-                return_url=return_url,
-                cancel_url=cancel_url,
-            )
-            sub.gateway_subscription_id = session.gateway_order_id
-            sub = self._subs.update(sub)
+        # paid plan - call gateway FIRST, save subscription only on success
+        if self._gateway is None:
+            raise ValueError("Payment gateway required for paid plans")
 
+        period_end = now + timedelta(days=BILLING_PERIOD_DAYS)
+        sub_id = uuid.uuid4()
+
+        # this raises PaymentGatewayError if it fails - subscription is NOT saved
+        session = self._gateway.initiate(
+            order_id=str(sub_id),
+            amount=amount,
+            currency="NPR",
+            description=f"Sansaar {plan.title()} Plan - Monthly",
+            customer_email=customer_email,
+            return_url=return_url,
+            cancel_url=cancel_url,
+        )
+
+        # gateway succeeded - cancel existing, save new as pending
+        if existing is not None:
+            existing.status = "cancelled"
+            existing.cancelled_at = now
+            self._subs.update(existing)
+            publish_event(
+                routing_key="subscription.cancelled",
+                payload={"org_id": str(org_id), "plan": existing.plan, "subscription_id": str(existing.id)},
+            )
+
+        sub = SubscriptionEntity(
+            id=sub_id,
+            org_id=org_id,
+            plan=plan,
+            status="pending",
+            gateway=gateway,
+            gateway_subscription_id=session.gateway_order_id,
+            amount=amount,
+            currency="NPR",
+            current_period_start=now,
+            current_period_end=period_end,
+            created_at=now,
+            updated_at=now,
+        )
+        sub = self._subs.create(sub)
         return sub, session
