@@ -42,7 +42,7 @@ class PaymentOrder(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user_id = models.UUIDField()
     event_id = models.UUIDField()
-    registration_id = models.UUIDField(unique=True)
+    registration_id = models.UUIDField(unique=True, null=True, blank=True)
     subtotal = models.DecimalField(max_digits=12, decimal_places=2)
     discount_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
@@ -400,7 +400,7 @@ class SubscriptionPayment(models.Model):
 
 
 class ConnectedAccount(models.Model):
-    """A Stripe Express connected account belonging to an organiser org."""
+    """A Stripe Express connected account belonging to an organizer org."""
 
     class Meta:
         db_table = "payments_connected_account"
@@ -439,7 +439,7 @@ class ConnectedAccount(models.Model):
 
 
 class Payout(models.Model):
-    """A fund transfer sent to an organiser's connected Stripe account."""
+    """A fund transfer sent to an organizer's connected Stripe account."""
 
     class Meta:
         db_table = "payments_payout"

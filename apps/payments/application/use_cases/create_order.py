@@ -41,7 +41,7 @@ class CreatePaymentOrderUseCase:
         *,
         user_id: uuid.UUID,
         event_id: uuid.UUID,
-        registration_id: uuid.UUID,
+        registration_id: uuid.UUID | None,
         subtotal: Decimal,
         gateway: str,
         idempotency_key: uuid.UUID,
@@ -68,7 +68,7 @@ class CreatePaymentOrderUseCase:
         @param return_url          - where the gateway redirects on success
         @param cancel_url          - where the gateway redirects on failure/cancel
         @param description         - label shown on the gateway payment page
-        @param org_plan            - the organiser's plan (determines platform fee rate)
+        @param org_plan            - the organizer's plan (determines platform fee rate)
         @returns tuple of (order, payment_session); session is None for idempotent re-fetches
         @raises OrderAlreadyExistsError if another order exists for this registration
         @raises InvalidPromoCodeError if the promo is invalid
@@ -78,8 +78,11 @@ class CreatePaymentOrderUseCase:
         if existing is not None:
             return existing, None
 
-        if self._orders.has_order_for_registration(registration_id):
+        if registration_id is not None and self._orders.has_order_for_registration(registration_id):
             raise OrderAlreadyExistsError("An order already exists for this registration.")
+
+        if self._orders.has_active_order_for_event(user_id, event_id):
+            raise OrderAlreadyExistsError("You have already purchased a ticket for this event.")
 
         discount_amount = Decimal("0.00")
         promo_id: uuid.UUID | None = None
@@ -90,10 +93,11 @@ class CreatePaymentOrderUseCase:
             discount_amount = self._apply_promo(promo, subtotal)
             promo_id = promo.id
 
-        # ! look up fee rate by org plan, fallback to 5% for unknown plans
+        # ! platform fee is deducted from org revenue, not charged to the attendee
         fee_rate = PLAN_FEE_RATES.get(org_plan, PLATFORM_FEE_RATE)
         platform_fee = (subtotal * fee_rate).quantize(Decimal("0.01"))
-        total_amount = subtotal - discount_amount + platform_fee
+        # attendee pays only ticket price minus any discount
+        total_amount = subtotal - discount_amount
 
         now = datetime.now(timezone.utc)
         order = PaymentOrderEntity(

@@ -123,7 +123,7 @@ class SubscriptionPaymentEntity:
 
 @dataclass(slots=True)
 class ConnectedAccountEntity:
-    """A Stripe Express connected account belonging to an organiser org."""
+    """A Stripe Express connected account belonging to an organizer org."""
 
     id: uuid.UUID
     org_id: uuid.UUID
@@ -135,7 +135,7 @@ class ConnectedAccountEntity:
 
 @dataclass(slots=True)
 class PayoutEntity:
-    """A fund transfer sent to an organiser's connected Stripe account."""
+    """A fund transfer sent to an organizer's connected Stripe account."""
 
     id: uuid.UUID
     org_id: uuid.UUID

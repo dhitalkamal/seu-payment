@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # ! Khalti expects amount in paisa (1 NPR = 100 paisa)
 _PAISA_MULTIPLIER = 100
 
-_SANDBOX_URL = "https://a.khalti.com/api/v2/epayment/initiate/"
+_SANDBOX_URL = "https://dev.khalti.com/api/v2/epayment/initiate/"
 _LIVE_URL = "https://khalti.com/api/v2/epayment/initiate/"
 
 
@@ -57,7 +57,7 @@ class KhaltiGateway(IPaymentGateway):
                 "amount": amount_paisa,
                 "purchase_order_id": order_id,
                 "purchase_order_name": description[:256],
-                "customer_info": {"email": customer_email},
+                "customer_info": {"name": customer_email.split("@")[0] if customer_email else "Customer", "email": customer_email},
             }
         ).encode("utf-8")
 
@@ -74,7 +74,15 @@ class KhaltiGateway(IPaymentGateway):
         try:
             with urlopen(req, timeout=15) as resp:
                 body = json.loads(resp.read())
-        except (HTTPError, URLError, TimeoutError) as exc:
+        except HTTPError as exc:
+            error_body = ""
+            try:
+                error_body = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            logger.error("Khalti initiate failed: %s | body: %s", exc, error_body)
+            raise PaymentGatewayError(f"Khalti payment initiation failed: {error_body or exc}") from exc
+        except (URLError, TimeoutError) as exc:
             logger.error("Khalti initiate failed: %s", exc)
             raise PaymentGatewayError(f"Khalti payment initiation failed: {exc}") from exc
 

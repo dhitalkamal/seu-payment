@@ -149,6 +149,7 @@ PAYPAL_SANDBOX = config("PAYPAL_SANDBOX", default=True, cast=bool)
 
 # * Frontend URL for building return/cancel URLs
 FRONTEND_WEB_URL = config("FRONTEND_WEB_URL", default="http://localhost:5173")
+MANAGEMENT_SERVICE_URL = config("MANAGEMENT_SERVICE_URL", default="http://management:8006")
 
 # * public base url for payment callbacks - gateways redirect browsers here
 PAYMENT_CALLBACK_BASE_URL = config("PAYMENT_CALLBACK_BASE_URL", default="http://localhost/payment/api/v1")

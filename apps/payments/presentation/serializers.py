@@ -9,17 +9,13 @@ class CreateOrderSerializer(serializers.Serializer):
     """Payload for creating a payment order."""
 
     event_id = serializers.UUIDField()
-    registration_id = serializers.UUIDField()
+    registration_id = serializers.UUIDField(required=False, allow_null=True, default=None)
     subtotal = serializers.DecimalField(max_digits=12, decimal_places=2)
     gateway = serializers.ChoiceField(choices=["khalti", "esewa", "stripe", "paypal"])
     idempotency_key = serializers.UUIDField()
     promo_code = serializers.CharField(max_length=50, required=False, allow_null=True, default=None)
-    # ! org_plan drives the platform fee rate — passed by the frontend from the event/org context
-    org_plan = serializers.ChoiceField(
-        choices=["free", "starter", "pro", "ngo", "enterprise"],
-        required=False,
-        default="free",
-    )
+    # org that owns the event - used to fetch the plan server-side for fee calculation
+    organization_id = serializers.UUIDField(required=False, allow_null=True, default=None)
 
 
 class RequestRefundSerializer(serializers.Serializer):

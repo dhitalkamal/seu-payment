@@ -18,6 +18,7 @@ from apps.common.permissions import IsOrgAdmin, IsOrgOwner, IsSuperAdminFromAllo
 from apps.payments.application.use_cases.create_connected_account import CreateConnectedAccountUseCase
 from apps.payments.application.use_cases.create_dispute import CreateDisputeUseCase
 from apps.payments.application.use_cases.create_order import CreatePaymentOrderUseCase
+from apps.payments.infrastructure.plan_client import HttpPlanClient
 from apps.payments.application.use_cases.create_payout import CreatePayoutUseCase
 from apps.payments.application.use_cases.create_promo_code import CreatePromoCodeUseCase
 from apps.payments.application.use_cases.get_order import GetOrderUseCase
@@ -264,7 +265,7 @@ class CreateOrderView(APIView):
         base_web = settings.FRONTEND_WEB_URL
         callback_base = settings.PAYMENT_CALLBACK_BASE_URL
         return_url = f"{callback_base}/callbacks/{gateway_name}/"
-        cancel_url = f"{base_web}/payment/failure"
+        cancel_url = f"{base_web}/events?payment_error=true"
 
         gateway_client = get_gateway(gateway_name)
 
@@ -284,7 +285,7 @@ class CreateOrderView(APIView):
             customer_first_name=first_name,
             return_url=return_url,
             cancel_url=cancel_url,
-            org_plan=d.get("org_plan", "free"),
+            org_plan=self._resolve_org_plan(d.get("organization_id")),
         )
 
         resp_data = _ORDER_RESP_SER(order).data
@@ -305,6 +306,12 @@ class CreateOrderView(APIView):
             },
         )
         return _CREATED(resp_data, request=request)
+
+    def _resolve_org_plan(self, organization_id: _UUID | None) -> str:
+        """Fetch org plan from management-service. Falls back to 'free'."""
+        if organization_id is None:
+            return "free"
+        return HttpPlanClient(settings.MANAGEMENT_SERVICE_URL).get_org_plan(organization_id)
 
 
 class RequestRefundView(APIView):
@@ -614,12 +621,16 @@ class PaymentCallbackView(APIView):
         responses={302: OpenApiResponse(description="Redirect to frontend.")},
     )
     def get(self, request: Request, gateway: str) -> Response:
-        """Parse gateway-specific query params and redirect to the frontend success/failure page."""
+        """Parse gateway-specific query params and redirect to the originating page."""
         from django.http import HttpResponseRedirect
 
         base = settings.FRONTEND_WEB_URL
         # custom redirect path from the initiating flow (e.g. subscription vs ticket)
         custom_redirect = request.query_params.get("redirect", "")
+        # on failure, go back to where the user came from with an error flag
+        fail_redirect = custom_redirect or "/events"
+        fail_sep = "&" if "?" in fail_redirect else "?"
+        fail_url = f"{base}{fail_redirect}{fail_sep}payment_error=true"
 
         if gateway == "khalti":
             # Khalti appends ?pidx=...&status=...&purchase_order_id=...
@@ -638,11 +649,11 @@ class PaymentCallbackView(APIView):
                             routing_key="payment.order.completed",
                             payload=_order_completed_payload(order),
                         )
-                    success_path = custom_redirect or f"/payment/success?order_id={order.id}"
+                    success_path = custom_redirect or f"/tickets?payment=success"
                     return HttpResponseRedirect(f"{base}{success_path}")
                 except Exception:
                     pass
-            return HttpResponseRedirect(f"{base}/payment/failure")
+            return HttpResponseRedirect(fail_url)
 
         if gateway == "esewa":
             # eSewa appends ?data=<base64_json> on success
@@ -666,25 +677,27 @@ class PaymentCallbackView(APIView):
                             routing_key="payment.order.completed",
                             payload=_order_completed_payload(order),
                         )
-                    success_path = custom_redirect or f"/payment/success?order_id={order.id}"
+                    success_path = custom_redirect or f"/tickets?payment=success"
                     return HttpResponseRedirect(f"{base}{success_path}")
                 except Exception:
                     pass
-            return HttpResponseRedirect(f"{base}/payment/failure")
+            return HttpResponseRedirect(fail_url)
 
         if gateway == "stripe":
             session_id = request.query_params.get("session_id", "")
             if session_id:
-                return HttpResponseRedirect(f"{base}/payment/success?session_id={session_id}")
-            return HttpResponseRedirect(f"{base}/payment/failure")
+                success_path = custom_redirect or f"/tickets?payment=success"
+                return HttpResponseRedirect(f"{base}{success_path}")
+            return HttpResponseRedirect(fail_url)
 
         if gateway == "paypal":
             token = request.query_params.get("token", "")
             if token:
-                return HttpResponseRedirect(f"{base}/payment/success?paypal_token={token}")
-            return HttpResponseRedirect(f"{base}/payment/failure")
+                success_path = custom_redirect or f"/tickets?payment=success"
+                return HttpResponseRedirect(f"{base}{success_path}")
+            return HttpResponseRedirect(fail_url)
 
-        return HttpResponseRedirect(f"{base}/payment/failure")
+        return HttpResponseRedirect(fail_url)
 
 
 # * ---- Subscription views ----
@@ -745,7 +758,7 @@ class SubscriptionCreateView(APIView):
             org_id=d["org_id"],
             plan=d["plan"],
             gateway=gateway_name,
-            return_url=f"{callback_base}/callbacks/{gateway_name}/?redirect=/org/pricing?subscribed=true",
+            return_url=f"{callback_base}/callbacks/{gateway_name}/?redirect=%2Forg%2Fpricing%3Fsubscribed%3Dtrue",
             cancel_url=f"{base_web}/org/pricing?cancelled=true",
             customer_email=email,
         )

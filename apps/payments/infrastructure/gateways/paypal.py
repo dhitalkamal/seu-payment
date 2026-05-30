@@ -70,8 +70,14 @@ class PayPalGateway(IPaymentGateway):
         base_url = _SANDBOX_API if getattr(settings, "PAYPAL_SANDBOX", True) else _LIVE_API
         token = _get_access_token(base_url, client_id, client_secret)
 
-        # ! PayPal amount must be a string with exactly 2 decimal places
-        amount_str = f"{amount:.2f}"
+        # ! PayPal doesn't support NPR; convert to USD at approximate rate
+        paypal_currency = currency.upper()
+        paypal_amount = amount
+        if paypal_currency == "NPR":
+            paypal_currency = "USD"
+            paypal_amount = (amount / Decimal("134")).quantize(Decimal("0.01"))
+
+        amount_str = f"{paypal_amount:.2f}"
 
         payload = json.dumps(
             {
@@ -81,7 +87,7 @@ class PayPalGateway(IPaymentGateway):
                         "reference_id": order_id,
                         "description": description[:127],
                         "amount": {
-                            "currency_code": currency.upper(),
+                            "currency_code": paypal_currency,
                             "value": amount_str,
                         },
                     }

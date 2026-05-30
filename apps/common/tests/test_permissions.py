@@ -130,7 +130,7 @@ def test_org_role_permission_matrix(perm_class, role, expected):
     """Every (class, role) combo grants or denies access correctly."""
     org_id = "org-123"
     perm = perm_class()
-    req = _make_request(org_roles={org_id: role}, data={"organisation_id": org_id})
+    req = _make_request(org_roles={org_id: role}, data={"organization_id": org_id})
     view = _make_view()
     assert perm.has_permission(req, view) is expected
 
@@ -156,7 +156,7 @@ def test_org_role_org_id_from_query_params():
     """Org ID resolved from query param when not in data or kwargs."""
     org_id = "org-qp"
     perm = IsOrgMember()
-    req = _make_request(org_roles={org_id: "member"}, query_params={"organisation_id": org_id})
+    req = _make_request(org_roles={org_id: "member"}, query_params={"organization_id": org_id})
     view = _make_view()
     assert perm.has_permission(req, view) is True
 
@@ -165,7 +165,7 @@ def test_org_roles_from_jwt_token_payload():
     """org_roles are read from token.payload when available."""
     org_id = "org-jwt"
     perm = IsOrgOwner()
-    req = _make_request(data={"organisation_id": org_id})
+    req = _make_request(data={"organization_id": org_id})
     # simulate token with payload attribute
     token = MagicMock()
     token.payload = {"org_roles": {org_id: "owner"}}

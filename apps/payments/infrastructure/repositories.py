@@ -72,6 +72,14 @@ class DjangoPaymentOrderRepository(IPaymentOrderRepository):
         """True if any order exists for this registration."""
         return PaymentOrder.objects.filter(registration_id=registration_id).exists()
 
+    def has_active_order_for_event(self, user_id: uuid.UUID, event_id: uuid.UUID) -> bool:
+        """True if user already has a non-failed order for this event."""
+        return PaymentOrder.objects.filter(
+            user_id=user_id,
+            event_id=event_id,
+            status__in=["created", "processing", "completed"],
+        ).exists()
+
     def update(self, entity: PaymentOrderEntity) -> PaymentOrderEntity:
         """Fetch the existing row, update mutable fields, and save."""
         obj = PaymentOrder.objects.get(id=entity.id)
