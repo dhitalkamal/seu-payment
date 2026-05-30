@@ -618,6 +618,8 @@ class PaymentCallbackView(APIView):
         from django.http import HttpResponseRedirect
 
         base = settings.FRONTEND_WEB_URL
+        # custom redirect path from the initiating flow (e.g. subscription vs ticket)
+        custom_redirect = request.query_params.get("redirect", "")
 
         if gateway == "khalti":
             # Khalti appends ?pidx=...&status=...&purchase_order_id=...
@@ -636,7 +638,8 @@ class PaymentCallbackView(APIView):
                             routing_key="payment.order.completed",
                             payload=_order_completed_payload(order),
                         )
-                    return HttpResponseRedirect(f"{base}/payment/success?order_id={order.id}")
+                    success_path = custom_redirect or f"/payment/success?order_id={order.id}"
+                    return HttpResponseRedirect(f"{base}{success_path}")
                 except Exception:
                     pass
             return HttpResponseRedirect(f"{base}/payment/failure")
@@ -663,7 +666,8 @@ class PaymentCallbackView(APIView):
                             routing_key="payment.order.completed",
                             payload=_order_completed_payload(order),
                         )
-                    return HttpResponseRedirect(f"{base}/payment/success?order_id={order.id}")
+                    success_path = custom_redirect or f"/payment/success?order_id={order.id}"
+                    return HttpResponseRedirect(f"{base}{success_path}")
                 except Exception:
                     pass
             return HttpResponseRedirect(f"{base}/payment/failure")
@@ -741,8 +745,8 @@ class SubscriptionCreateView(APIView):
             org_id=d["org_id"],
             plan=d["plan"],
             gateway=gateway_name,
-            return_url=f"{callback_base}/callbacks/{gateway_name}/",
-            cancel_url=f"{base_web}/orgs/billing?cancelled=true",
+            return_url=f"{callback_base}/callbacks/{gateway_name}/?redirect=/org/pricing?subscribed=true",
+            cancel_url=f"{base_web}/org/pricing?cancelled=true",
             customer_email=email,
         )
 
