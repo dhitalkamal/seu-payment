@@ -37,7 +37,7 @@ class PaymentOrder(models.Model):
         PAYPAL = "paypal", "PayPal"
 
     class Meta:
-        db_table = '"payments"."payment_order"'
+        db_table = "payments_payment_order"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user_id = models.UUIDField()
@@ -120,7 +120,7 @@ class Refund(models.Model):
         FAILED = "failed", "Failed"
 
     class Meta:
-        db_table = '"payments"."refund"'
+        db_table = "payments_refund"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     order = models.ForeignKey(PaymentOrder, on_delete=models.PROTECT, related_name="refunds")
@@ -163,7 +163,7 @@ class PromoCode(models.Model):
         FIXED_AMOUNT = "fixed_amount", "Fixed Amount"
 
     class Meta:
-        db_table = '"payments"."promo_code"'
+        db_table = "payments_promo_code"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     code = models.CharField(max_length=50, unique=True)
@@ -224,7 +224,7 @@ class Dispute(models.Model):
         OTHER = "other", "Other"
 
     class Meta:
-        db_table = '"payments"."dispute"'
+        db_table = "payments_dispute"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     order = models.ForeignKey(PaymentOrder, on_delete=models.CASCADE, related_name="disputes")
@@ -289,7 +289,7 @@ class Subscription(models.Model):
         ENTERPRISE = "enterprise", "Enterprise"
 
     class Meta:
-        db_table = '"payments"."subscription"'
+        db_table = "payments_subscription"
         indexes = [
             models.Index(fields=["org_id", "-created_at"]),
             models.Index(fields=["gateway_subscription_id"]),
@@ -353,7 +353,7 @@ class SubscriptionPayment(models.Model):
         FAILED = "failed", "Failed"
 
     class Meta:
-        db_table = '"payments"."subscription_payment"'
+        db_table = "payments_subscription_payment"
         indexes = [models.Index(fields=["subscription", "-paid_at"])]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -403,7 +403,7 @@ class ConnectedAccount(models.Model):
     """A Stripe Express connected account belonging to an organiser org."""
 
     class Meta:
-        db_table = '"payments"."connected_account"'
+        db_table = "payments_connected_account"
         indexes = [
             models.Index(fields=["org_id"], name="idx_connected_account_org"),
         ]
@@ -442,7 +442,7 @@ class Payout(models.Model):
     """A fund transfer sent to an organiser's connected Stripe account."""
 
     class Meta:
-        db_table = '"payments"."payout"'
+        db_table = "payments_payout"
         indexes = [
             models.Index(fields=["org_id", "-created_at"], name="idx_payout_org_created"),
         ]

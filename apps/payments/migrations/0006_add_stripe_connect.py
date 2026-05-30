@@ -23,7 +23,7 @@ class Migration(migrations.Migration):
                 ('created_at', models.DateTimeField(auto_now_add=True)),
             ],
             options={
-                'db_table': '"payments"."connected_account"',
+                'db_table': "payments_connected_account",
                 'indexes': [models.Index(fields=['org_id'], name='idx_connected_account_org')],
             },
         ),
@@ -40,7 +40,7 @@ class Migration(migrations.Migration):
                 ('created_at', models.DateTimeField(auto_now_add=True)),
             ],
             options={
-                'db_table': '"payments"."payout"',
+                'db_table': "payments_payout",
                 'indexes': [models.Index(fields=['org_id', '-created_at'], name='idx_payout_org_created')],
             },
         ),

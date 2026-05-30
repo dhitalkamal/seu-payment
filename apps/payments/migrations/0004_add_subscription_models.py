@@ -33,7 +33,7 @@ class Migration(migrations.Migration):
                 ("updated_at", models.DateTimeField(auto_now=True)),
             ],
             options={
-                "db_table": '"payments"."subscription"',
+                "db_table": "payments_subscription",
                 "indexes": [
                     models.Index(fields=["org_id", "-created_at"], name="sub_org_id_idx"),
                     models.Index(fields=["gateway_subscription_id"], name="sub_gw_sub_idx"),
@@ -54,7 +54,7 @@ class Migration(migrations.Migration):
                 ("paid_at", models.DateTimeField()),
             ],
             options={
-                "db_table": '"payments"."subscription_payment"',
+                "db_table": "payments_subscription_payment",
                 "indexes": [
                     models.Index(fields=["subscription", "-paid_at"], name="sp_sub_paid_idx"),
                 ],

@@ -12,9 +12,9 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
     """Initial payments tables."""
 
-    dependencies = [
-        ("payments", "0000_create_payments_schema"),
-    ]
+    initial = True
+
+    dependencies = []
 
     operations = [
         migrations.CreateModel(
@@ -78,7 +78,7 @@ class Migration(migrations.Migration):
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
             ],
-            options={"db_table": '"payments"."payment_order"'},
+            options={"db_table": "payments_payment_order"},
         ),
         migrations.CreateModel(
             name="Refund",
@@ -114,7 +114,7 @@ class Migration(migrations.Migration):
                 ("gateway_refund_id", models.CharField(blank=True, max_length=255)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
             ],
-            options={"db_table": '"payments"."refund"'},
+            options={"db_table": "payments_refund"},
         ),
         migrations.CreateModel(
             name="PromoCode",
@@ -141,6 +141,6 @@ class Migration(migrations.Migration):
                 ("used_count", models.PositiveIntegerField(default=0)),
                 ("created_at", models.DateTimeField(auto_now_add=True)),
             ],
-            options={"db_table": '"payments"."promo_code"'},
+            options={"db_table": "payments_promo_code"},
         ),
     ]
