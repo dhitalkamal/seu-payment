@@ -1,16 +1,110 @@
 """DRF API views for payments endpoints."""
+
 from __future__ import annotations
+
+import uuid
 
 from django.conf import settings
 from drf_spectacular.utils import OpenApiResponse, extend_schema, inline_serializer
 from rest_framework import serializers
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.common.api.responses import error_response, success_response
+from apps.common.api.responses import created_response, error_response, success_response
 from apps.common.health import check_database, check_rabbitmq, check_redis
+from apps.common.permissions import IsOrgAdmin, IsOrgOwner, IsSuperAdminFromAllowedIP
+from apps.payments.application.use_cases.create_connected_account import CreateConnectedAccountUseCase
+from apps.payments.application.use_cases.create_dispute import CreateDisputeUseCase
+from apps.payments.application.use_cases.create_order import CreatePaymentOrderUseCase
+from apps.payments.application.use_cases.create_payout import CreatePayoutUseCase
+from apps.payments.application.use_cases.create_promo_code import CreatePromoCodeUseCase
+from apps.payments.application.use_cases.get_order import GetOrderUseCase
+from apps.payments.application.use_cases.list_disputes import ListDisputesUseCase
+from apps.payments.application.use_cases.list_my_orders import ListMyOrdersUseCase
+from apps.payments.application.use_cases.list_promo_codes import ListPromoCodesUseCase
+from apps.payments.application.use_cases.process_to_processing import TransitionToProcessingUseCase
+from apps.payments.application.use_cases.process_webhook import ProcessWebhookUseCase
+from apps.payments.application.use_cases.request_refund import RequestRefundUseCase
+from apps.payments.application.use_cases.update_dispute_status import UpdateDisputeStatusUseCase
+from apps.payments.application.use_cases.validate_promo_code import ValidatePromoCodeUseCase
+from apps.payments.domain.exceptions import DisputeNotFoundError, InvalidPromoCodeError
+from apps.payments.infrastructure.audit_publisher import publish_audit
+from apps.payments.infrastructure.gateways import get_gateway
+from apps.payments.infrastructure.plan_client import HttpPlanClient
+from apps.payments.infrastructure.publisher import publish_event
+from apps.payments.infrastructure.repositories import (
+    DjangoConnectedAccountRepository,
+    DjangoDisputeRepository,
+    DjangoPaymentOrderRepository,
+    DjangoPayoutRepository,
+    DjangoPromoCodeRepository,
+    DjangoRefundRepository,
+)
+from apps.payments.infrastructure.webhook_verify import (
+    verify_esewa_signature,
+    verify_khalti_signature,
+    verify_stripe_signature,
+)
+from apps.payments.presentation.serializers import (
+    CancelSubscriptionSerializer,
+    CreateDisputeSerializer,
+    CreateOrderSerializer,
+    CreatePromoCodeSerializer,
+    CreateSubscriptionSerializer,
+    DisputeResponseSerializer,
+    EsewaWebhookSerializer,
+    KhaltiWebhookSerializer,
+    PaymentOrderResponseSerializer,
+    PromoCodeResponseSerializer,
+    RefundResponseSerializer,
+    RequestRefundSerializer,
+    SubscriptionPaymentResponseSerializer,
+    SubscriptionResponseSerializer,
+    UpdateDisputeStatusSerializer,
+)
+
+_IS_AUTH = IsAuthenticated
+_CREATED = created_response
+_UUID = uuid.UUID
+_CREATE_ORDER_UC = CreatePaymentOrderUseCase
+_GET_ORDER_UC = GetOrderUseCase
+_LIST_ORDERS_UC = ListMyOrdersUseCase
+_REFUND_UC = RequestRefundUseCase
+_ORDER_REPO = DjangoPaymentOrderRepository
+_PROMO_REPO = DjangoPromoCodeRepository
+_REFUND_REPO = DjangoRefundRepository
+_DISPUTE_REPO = DjangoDisputeRepository
+_VALIDATE_PROMO_UC = ValidatePromoCodeUseCase
+_CREATE_PROMO_UC = CreatePromoCodeUseCase
+_LIST_PROMOS_UC = ListPromoCodesUseCase
+_CREATE_DISPUTE_UC = CreateDisputeUseCase
+_LIST_DISPUTES_UC = ListDisputesUseCase
+_UPDATE_DISPUTE_UC = UpdateDisputeStatusUseCase
+_CREATE_ORDER_SER = CreateOrderSerializer
+_ORDER_RESP_SER = PaymentOrderResponseSerializer
+_REFUND_RESP_SER = RefundResponseSerializer
+_REFUND_SER = RequestRefundSerializer
+_WEBHOOK_UC = ProcessWebhookUseCase
+_TO_PROCESSING_UC = TransitionToProcessingUseCase
+_KHALTI_SER = KhaltiWebhookSerializer
+_ESEWA_SER = EsewaWebhookSerializer
+
+
+def _order_completed_payload(order: object) -> dict:
+    """Build the payment.order.completed event payload with all notification fields."""
+    return {
+        "order_id": str(order.id),
+        "registration_id": str(order.registration_id),
+        "user_id": str(order.user_id),
+        "event_id": str(order.event_id),
+        "email": order.customer_email,
+        "first_name": order.customer_first_name,
+        "amount": str(order.total_amount),
+        "gateway": order.gateway,
+    }
+
 
 _CHECKS = inline_serializer(
     name="DependencyChecks",
@@ -38,10 +132,7 @@ class HealthCheckView(APIView):
     @extend_schema(
         tags=["Health"],
         summary="Service health check",
-        description=(
-            "Checks connectivity to PostgreSQL, Redis, and RabbitMQ. "
-            "Returns 200 when all dependencies are healthy, 503 when any are down."
-        ),
+        description=("Checks connectivity to PostgreSQL, Redis, and RabbitMQ. Returns 200 when all dependencies are healthy, 503 when any are down."),
         auth=[],
         responses={
             200: OpenApiResponse(
@@ -122,5 +213,1207 @@ class HealthCheckView(APIView):
             message="One or more dependencies are unavailable.",
             details={"checks": checks, **({"errors": dep_errors} if dep_errors else {})},
             http_status=503,
+            request=request,
+        )
+
+
+class CreateOrderView(APIView):
+    """List own orders (GET) or create a payment order (POST)."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Orders"],
+        summary="List my orders",
+        description="Returns all orders for the authenticated user, newest first.",
+        responses={
+            200: OpenApiResponse(description="User orders.", response=_ORDER_RESP_SER(many=True)),
+            401: OpenApiResponse(description="Missing or invalid JWT."),
+        },
+    )
+    def get(self, request: Request) -> Response:
+        """Return all orders owned by the authenticated user."""
+        results = _LIST_ORDERS_UC(_ORDER_REPO()).execute(
+            user_id=_UUID(str(request.user.id)),
+        )
+        return success_response(_ORDER_RESP_SER(results, many=True).data, request=request)
+
+    @extend_schema(
+        tags=["Orders"],
+        summary="Create a payment order",
+        description=("Creates an order with 5% platform fee applied. Submitting the same idempotency_key returns the existing order. Optionally supply a promo_code for a discount."),
+        request=_CREATE_ORDER_SER,
+        responses={
+            201: OpenApiResponse(description="Order created.", response=_ORDER_RESP_SER),
+            401: OpenApiResponse(description="Missing or invalid JWT."),
+            409: OpenApiResponse(description="Order already exists for this registration."),
+            422: OpenApiResponse(description="Invalid promo code."),
+        },
+    )
+    def post(self, request: Request) -> Response:
+        """Validate payload, compute fees, call gateway, and return the payment URL."""
+        ser = _CREATE_ORDER_SER(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+
+        gateway_name = d["gateway"]
+        email = request.user.token.get("email", "")
+        first_name = request.user.token.get("first_name", "")
+
+        # * build return/cancel URLs - gateway redirects to our callback endpoint,
+        # which processes the result and then redirects to the frontend
+        base_web = settings.FRONTEND_WEB_URL
+        callback_base = settings.PAYMENT_CALLBACK_BASE_URL
+        return_url = f"{callback_base}/callbacks/{gateway_name}/"
+        cancel_url = f"{base_web}/events?payment_error=true"
+
+        gateway_client = get_gateway(gateway_name)
+
+        org_id_val: _UUID | None = d.get("organization_id")
+        order, session = _CREATE_ORDER_UC(
+            order_repo=_ORDER_REPO(),
+            promo_repo=_PROMO_REPO(),
+            gateway_client=gateway_client,
+        ).execute(
+            user_id=_UUID(str(request.user.id)),
+            event_id=d["event_id"],
+            registration_id=d["registration_id"],
+            subtotal=d["subtotal"],
+            gateway=gateway_name,
+            idempotency_key=d["idempotency_key"],
+            promo_code=d["promo_code"],
+            customer_email=email,
+            customer_first_name=first_name,
+            return_url=return_url,
+            cancel_url=cancel_url,
+            org_plan=self._resolve_org_plan(org_id_val),
+            organization_id=org_id_val,
+        )
+
+        resp_data = _ORDER_RESP_SER(order).data
+        if session is not None:
+            resp_data["payment_url"] = session.payment_url
+            # * eSewa returns form data the client needs to POST
+            if gateway_name == "esewa" and "form_data" in session.raw_response:
+                resp_data["esewa_form_data"] = session.raw_response["form_data"]
+                resp_data["esewa_form_url"] = session.raw_response["form_url"]
+        publish_audit(
+            request=request,
+            user_id=_UUID(str(request.user.id)),
+            event_type="order.created",
+            metadata={
+                "event_id": str(d["event_id"]),
+                "gateway": gateway_name,
+                "subtotal": str(d["subtotal"]),
+            },
+        )
+        return _CREATED(resp_data, request=request)
+
+    def _resolve_org_plan(self, organization_id: _UUID | None) -> str:
+        """Fetch org plan from management-service. Falls back to 'free'."""
+        if organization_id is None:
+            return "free"
+        return HttpPlanClient(settings.MANAGEMENT_SERVICE_URL).get_org_plan(organization_id)
+
+
+class RequestRefundView(APIView):
+    """List refunds (GET) or request a new refund (POST) for the authenticated user."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Refunds"],
+        summary="List my refunds",
+        description="Returns all refunds for the authenticated user, newest first. Optionally filter by ?status=pending|completed|failed.",
+        responses={
+            200: OpenApiResponse(description="User refunds.", response=_REFUND_RESP_SER(many=True)),
+            401: OpenApiResponse(description="Missing or invalid JWT."),
+        },
+    )
+    def get(self, request: Request) -> Response:
+        """Return all refunds belonging to the authenticated user, with optional status filter."""
+        from apps.payments.infrastructure.models import Refund as RefundModel
+
+        user_id = _UUID(str(request.user.id))
+        qs = RefundModel.objects.filter(order__user_id=user_id).order_by("-created_at")
+
+        status_filter = request.query_params.get("status", "")
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+
+        refunds = [r.to_entity() for r in qs]
+        return success_response(_REFUND_RESP_SER(refunds, many=True).data, request=request)
+
+    @extend_schema(
+        tags=["Refunds"],
+        summary="Request a refund",
+        description="Creates a PENDING refund. Only COMPLETED orders can be refunded.",
+        request=_REFUND_SER,
+        responses={
+            201: OpenApiResponse(description="Refund requested.", response=_REFUND_RESP_SER),
+            401: OpenApiResponse(description="Missing or invalid JWT."),
+            404: OpenApiResponse(description="Order not found."),
+            422: OpenApiResponse(description="Order is not in completed status."),
+        },
+    )
+    def post(self, request: Request) -> Response:
+        """Validate ownership and status, then create a pending refund."""
+        ser = _REFUND_SER(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+
+        from apps.payments.domain.exceptions import OrderNotFoundError
+        from apps.payments.infrastructure.gateways import get_gateway
+
+        order_repo = _ORDER_REPO()
+        try:
+            order = order_repo.get_by_id(d["order_id"], user_id=_UUID(str(request.user.id)))
+        except OrderNotFoundError:
+            return error_response(code="ERR_NOT_FOUND", message="Order not found.", http_status=404, request=request)
+        gateway = get_gateway(order.gateway)
+        result = _REFUND_UC(
+            order_repo=order_repo,
+            refund_repo=_REFUND_REPO(),
+            gateway=gateway,
+        ).execute(
+            order_id=d["order_id"],
+            user_id=_UUID(str(request.user.id)),
+            amount=d["amount"],
+            reason=d["reason"],
+        )
+        publish_audit(
+            request=request,
+            user_id=_UUID(str(request.user.id)),
+            event_type="refund.requested",
+            metadata={
+                "order_id": str(d["order_id"]),
+                "reason": d["reason"],
+            },
+        )
+        return _CREATED(_REFUND_RESP_SER(result).data, request=request)
+
+
+class OrderDetailView(APIView):
+    """Retrieve a single payment order owned by the authenticated user."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Orders"],
+        summary="Get order by id",
+        responses={
+            200: OpenApiResponse(description="Order found.", response=_ORDER_RESP_SER),
+            401: OpenApiResponse(description="Missing or invalid JWT."),
+            404: OpenApiResponse(description="Order not found."),
+        },
+    )
+    def get(self, request: Request, order_id: uuid.UUID) -> Response:
+        """Return the order if it exists and belongs to the authenticated user."""
+        result = _GET_ORDER_UC(_ORDER_REPO()).execute(
+            order_id=order_id,
+            user_id=_UUID(str(request.user.id)),
+        )
+        return success_response(_ORDER_RESP_SER(result).data, request=request)
+
+
+class KhaltiWebhookView(APIView):
+    """Receive payment status callbacks from Khalti."""
+
+    authentication_classes: list = []
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        tags=["Webhooks"],
+        summary="Khalti payment webhook",
+        auth=[],
+        request=_KHALTI_SER,
+        responses={200: OpenApiResponse(description="Webhook processed.")},
+    )
+    def post(self, request: Request) -> Response:
+        """Process the Khalti callback and update the matching order."""
+        sig = request.headers.get("X-Khalti-Signature", "")
+        if not verify_khalti_signature(request.body, sig):
+            return error_response(
+                code="ERR_PAYMENT_INVALID_SIGNATURE",
+                message="Webhook signature verification failed.",
+                http_status=400,
+                request=request,
+            )
+        ser = _KHALTI_SER(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+
+        khalti_to_internal = {"Completed": "completed", "Failed": "failed"}
+        internal_status = khalti_to_internal.get(d["status"], "processing")
+
+        order = _WEBHOOK_UC(_ORDER_REPO()).execute(
+            gateway_order_id=d["pidx"],
+            status=internal_status,
+            gateway_transaction_id=d.get("transaction_id", ""),
+        )
+        if order.status == "completed":
+            publish_event(
+                routing_key="payment.order.completed",
+                payload=_order_completed_payload(order),
+            )
+            publish_audit(
+                request=request,
+                user_id=_UUID(str(order.user_id)),
+                event_type="order.completed",
+                metadata={"gateway": "khalti"},
+            )
+        return success_response({"received": True}, request=request)
+
+
+class EsewaWebhookView(APIView):
+    """Receive payment status callbacks from eSewa."""
+
+    authentication_classes: list = []
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        tags=["Webhooks"],
+        summary="eSewa payment webhook",
+        auth=[],
+        request=_ESEWA_SER,
+        responses={200: OpenApiResponse(description="Webhook processed.")},
+    )
+    def post(self, request: Request) -> Response:
+        """Process the eSewa callback and update the matching order."""
+        sig = request.headers.get("X-Esewa-Signature", "")
+        if not verify_esewa_signature(request.body, sig):
+            return error_response(
+                code="ERR_PAYMENT_INVALID_SIGNATURE",
+                message="Webhook signature verification failed.",
+                http_status=400,
+                request=request,
+            )
+        ser = _ESEWA_SER(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+
+        esewa_to_internal = {"COMPLETE": "completed", "FAILED": "failed"}
+        internal_status = esewa_to_internal.get(d["status"], "processing")
+
+        order = _WEBHOOK_UC(_ORDER_REPO()).execute(
+            gateway_order_id=d["transaction_uuid"],
+            status=internal_status,
+            gateway_transaction_id=d.get("transaction_code", ""),
+        )
+        if order.status == "completed":
+            publish_event(
+                routing_key="payment.order.completed",
+                payload=_order_completed_payload(order),
+            )
+            publish_audit(
+                request=request,
+                user_id=_UUID(str(order.user_id)),
+                event_type="order.completed",
+                metadata={"gateway": "esewa"},
+            )
+        return success_response({"received": True}, request=request)
+
+
+class StripeWebhookView(APIView):
+    """Receive payment status callbacks from Stripe via webhook events."""
+
+    authentication_classes: list = []
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        tags=["Webhooks"],
+        summary="Stripe payment webhook",
+        auth=[],
+        responses={200: OpenApiResponse(description="Webhook processed.")},
+    )
+    def post(self, request: Request) -> Response:
+        """Process the Stripe webhook event and update the matching order."""
+        sig = request.headers.get("Stripe-Signature", "")
+        if not verify_stripe_signature(request.body, sig):
+            return error_response(
+                code="ERR_PAYMENT_INVALID_SIGNATURE",
+                message="Stripe webhook signature verification failed.",
+                http_status=400,
+                request=request,
+            )
+        import json
+
+        event_data = json.loads(request.body)
+        event_type = event_data.get("type", "")
+
+        # * we only care about checkout.session.completed and checkout.session.expired
+        if event_type == "checkout.session.completed":
+            session_obj = event_data.get("data", {}).get("object", {})
+            session_id = session_obj.get("id", "")
+            order = _WEBHOOK_UC(_ORDER_REPO()).execute(
+                gateway_order_id=session_id,
+                status="completed",
+                gateway_transaction_id=session_obj.get("payment_intent", ""),
+            )
+            if order.status == "completed":
+                publish_event(
+                    routing_key="payment.order.completed",
+                    payload=_order_completed_payload(order),
+                )
+                publish_audit(
+                    request=request,
+                    user_id=_UUID(str(order.user_id)),
+                    event_type="order.completed",
+                    metadata={"gateway": "stripe"},
+                )
+        elif event_type in ("checkout.session.expired", "checkout.session.async_payment_failed"):
+            session_obj = event_data.get("data", {}).get("object", {})
+            session_id = session_obj.get("id", "")
+            _WEBHOOK_UC(_ORDER_REPO()).execute(
+                gateway_order_id=session_id,
+                status="failed",
+                gateway_transaction_id="",
+            )
+
+        return success_response({"received": True}, request=request)
+
+
+class PayPalWebhookView(APIView):
+    """Capture a PayPal order after user approval and process the result."""
+
+    authentication_classes: list = []
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        tags=["Webhooks"],
+        summary="PayPal payment callback",
+        auth=[],
+        responses={200: OpenApiResponse(description="Payment captured.")},
+    )
+    def post(self, request: Request) -> Response:
+        """Capture the approved PayPal order and mark it completed or failed."""
+        from apps.payments.infrastructure.gateways.paypal import capture_order
+
+        paypal_order_id = request.data.get("paypal_order_id", "")
+        if not paypal_order_id:
+            return error_response(
+                code="ERR_PAYMENT_MISSING_ID",
+                message="paypal_order_id is required.",
+                http_status=400,
+                request=request,
+            )
+
+        try:
+            capture_response = capture_order(paypal_order_id)
+        except Exception as exc:
+            return error_response(
+                code="ERR_PAYMENT_CAPTURE_FAILED",
+                message=str(exc),
+                http_status=502,
+                request=request,
+            )
+
+        capture_status = capture_response.get("status", "")
+        internal_status = "completed" if capture_status == "COMPLETED" else "failed"
+
+        order = _WEBHOOK_UC(_ORDER_REPO()).execute(
+            gateway_order_id=paypal_order_id,
+            status=internal_status,
+            gateway_transaction_id=paypal_order_id,
+        )
+        if order.status == "completed":
+            publish_event(
+                routing_key="payment.order.completed",
+                payload=_order_completed_payload(order),
+            )
+            publish_audit(
+                request=request,
+                user_id=_UUID(str(order.user_id)),
+                event_type="order.completed",
+                metadata={"gateway": "paypal"},
+            )
+        return success_response(
+            {"captured": internal_status == "completed", "order_id": str(order.id)},
+            request=request,
+        )
+
+
+class PaymentCallbackView(APIView):
+    """Universal callback endpoint - gateways redirect here after payment. Redirects to frontend."""
+
+    authentication_classes: list = []
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        tags=["Callbacks"],
+        summary="Gateway callback redirect",
+        auth=[],
+        responses={302: OpenApiResponse(description="Redirect to frontend.")},
+    )
+    def get(self, request: Request, gateway: str) -> Response:
+        """Parse gateway-specific query params and redirect to the originating page."""
+        from django.http import HttpResponseRedirect
+
+        base = settings.FRONTEND_WEB_URL
+        # custom redirect path from the initiating flow (e.g. subscription vs ticket)
+        custom_redirect = request.query_params.get("redirect", "")
+        # on failure, go back to where the user came from with an error flag
+        fail_redirect = custom_redirect or "/events"
+        fail_sep = "&" if "?" in fail_redirect else "?"
+        fail_url = f"{base}{fail_redirect}{fail_sep}payment_error=true"
+
+        if gateway == "khalti":
+            # Khalti appends ?pidx=...&status=...&purchase_order_id=...
+            status = request.query_params.get("status", "")
+            pidx = request.query_params.get("pidx", "")
+            if status == "Completed" and pidx:
+                # * look up and auto-complete via webhook UC
+                try:
+                    order = _WEBHOOK_UC(_ORDER_REPO()).execute(
+                        gateway_order_id=pidx,
+                        status="completed",
+                        gateway_transaction_id=request.query_params.get("transaction_id", ""),
+                    )
+                    if order.status == "completed":
+                        publish_event(
+                            routing_key="payment.order.completed",
+                            payload=_order_completed_payload(order),
+                        )
+                    success_path = custom_redirect or "/tickets?payment=success"
+                    return HttpResponseRedirect(f"{base}{success_path}")
+                except Exception:
+                    pass
+            return HttpResponseRedirect(fail_url)
+
+        if gateway == "esewa":
+            # eSewa appends ?data=<base64_json> on success
+            import base64
+            import json
+
+            data_b64 = request.query_params.get("data", "")
+            if data_b64:
+                try:
+                    decoded = json.loads(base64.b64decode(data_b64))
+                    tx_uuid = decoded.get("transaction_uuid", "")
+                    status_val = decoded.get("status", "")
+                    internal = "completed" if status_val == "COMPLETE" else "failed"
+                    order = _WEBHOOK_UC(_ORDER_REPO()).execute(
+                        gateway_order_id=tx_uuid,
+                        status=internal,
+                        gateway_transaction_id=decoded.get("transaction_code", ""),
+                    )
+                    if order.status == "completed":
+                        publish_event(
+                            routing_key="payment.order.completed",
+                            payload=_order_completed_payload(order),
+                        )
+                    success_path = custom_redirect or "/tickets?payment=success"
+                    return HttpResponseRedirect(f"{base}{success_path}")
+                except Exception:
+                    pass
+            return HttpResponseRedirect(fail_url)
+
+        if gateway == "stripe":
+            session_id = request.query_params.get("session_id", "")
+            if session_id:
+                # activate pending subscription if this was a subscription payment
+                try:
+                    from apps.payments.infrastructure.repositories import DjangoSubscriptionRepository
+
+                    sub_repo = DjangoSubscriptionRepository()
+                    sub = sub_repo.get_by_gateway_id(session_id)
+                    if sub and sub.status == "pending":
+                        sub.status = "active"
+                        sub_repo.update(sub)
+                        publish_event(
+                            routing_key="subscription.activated",
+                            payload={
+                                "org_id": str(sub.org_id),
+                                "plan": sub.plan,
+                                "subscription_id": str(sub.id),
+                            },
+                        )
+                except Exception:
+                    pass
+                success_path = custom_redirect or "/tickets?payment=success"
+                return HttpResponseRedirect(f"{base}{success_path}")
+            return HttpResponseRedirect(fail_url)
+
+        if gateway == "paypal":
+            token = request.query_params.get("token", "")
+            if token:
+                success_path = custom_redirect or "/tickets?payment=success"
+                return HttpResponseRedirect(f"{base}{success_path}")
+            return HttpResponseRedirect(fail_url)
+
+        return HttpResponseRedirect(fail_url)
+
+
+# * ---- Subscription views ----
+
+
+class SubscriptionCreateView(APIView):
+    """GET /subscriptions/ - list all subscriptions; POST /subscriptions/ - create one."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Subscriptions"],
+        summary="List all subscriptions",
+        description="Returns all subscriptions. Optionally filter by org_id query parameter.",
+        responses={200: OpenApiResponse(description="All subscriptions.", response=SubscriptionResponseSerializer(many=True))},
+    )
+    def get(self, request: Request) -> Response:
+        """Return subscriptions filtered by org_id if provided, otherwise all."""
+        from apps.payments.infrastructure.repositories import DjangoSubscriptionRepository
+
+        repo = DjangoSubscriptionRepository()
+        org_id_param = request.query_params.get("org_id", "")
+        if org_id_param:
+            subs = repo.list_by_org(_UUID(org_id_param))
+        else:
+            subs = repo.list_all()
+        return success_response(SubscriptionResponseSerializer(subs, many=True).data, request=request)
+
+    @extend_schema(
+        tags=["Subscriptions"],
+        summary="Subscribe to a plan",
+        request=CreateSubscriptionSerializer,
+        responses={
+            201: OpenApiResponse(description="Subscription created."),
+            409: OpenApiResponse(description="Active subscription already exists."),
+        },
+    )
+    def post(self, request: Request) -> Response:
+        """Create a subscription and return the payment URL for paid plans."""
+        from apps.payments.application.use_cases.create_subscription import CreateSubscriptionUseCase
+        from apps.payments.infrastructure.repositories import DjangoSubscriptionRepository
+
+        ser = CreateSubscriptionSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+
+        gateway_name = d["gateway"]
+        email = request.user.token.get("email", "")
+        callback_base = settings.PAYMENT_CALLBACK_BASE_URL
+        base_web = settings.FRONTEND_WEB_URL
+
+        gateway_client = get_gateway(gateway_name)
+
+        sub, session = CreateSubscriptionUseCase(
+            sub_repo=DjangoSubscriptionRepository(),
+            gateway_client=gateway_client,
+        ).execute(
+            org_id=d["org_id"],
+            plan=d["plan"],
+            gateway=gateway_name,
+            return_url=f"{callback_base}/callbacks/{gateway_name}/?redirect=%2Forg%2Fpricing%3Fsubscribed%3Dtrue",
+            cancel_url=f"{base_web}/org/pricing?cancelled=true",
+            customer_email=email,
+        )
+
+        resp_data = SubscriptionResponseSerializer(sub).data
+        if session is not None:
+            resp_data["payment_url"] = session.payment_url
+            if gateway_name == "esewa" and "form_data" in session.raw_response:
+                resp_data["esewa_form_data"] = session.raw_response["form_data"]
+                resp_data["esewa_form_url"] = session.raw_response["form_url"]
+        publish_audit(
+            request=request,
+            user_id=_UUID(str(request.user.id)),
+            event_type="subscription.created",
+            metadata={
+                "org_id": str(d["org_id"]),
+                "plan": d["plan"],
+            },
+        )
+        return _CREATED(resp_data, request=request)
+
+
+class SubscriptionCurrentView(APIView):
+    """GET /subscriptions/current/?org_id=... - get active subscription for an org."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Subscriptions"],
+        summary="Get active subscription",
+        responses={
+            200: OpenApiResponse(description="Active subscription found."),
+            404: OpenApiResponse(description="No active subscription."),
+        },
+    )
+    def get(self, request: Request) -> Response:
+        """Return the org's active subscription or 404."""
+        from apps.payments.infrastructure.repositories import DjangoSubscriptionRepository
+
+        org_id = request.query_params.get("org_id", "")
+        if not org_id:
+            return error_response(
+                code="ERR_PAYMENT_MISSING_ORG_ID",
+                message="org_id query parameter is required.",
+                http_status=400,
+                request=request,
+            )
+
+        sub = DjangoSubscriptionRepository().get_active_by_org(_UUID(org_id))
+        if sub is None:
+            return success_response(None, request=request)
+        return success_response(SubscriptionResponseSerializer(sub).data, request=request)
+
+
+class SubscriptionCancelView(APIView):
+    """POST /subscriptions/cancel/ - cancel the org's active subscription."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Subscriptions"],
+        summary="Cancel subscription",
+        responses={
+            200: OpenApiResponse(description="Subscription cancelled."),
+            404: OpenApiResponse(description="No active subscription."),
+        },
+    )
+    def post(self, request: Request) -> Response:
+        """Cancel the active subscription for the given org."""
+        from apps.payments.application.use_cases.cancel_subscription import CancelSubscriptionUseCase
+        from apps.payments.infrastructure.repositories import DjangoSubscriptionRepository
+
+        ser = CancelSubscriptionSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+
+        sub = CancelSubscriptionUseCase(
+            sub_repo=DjangoSubscriptionRepository(),
+        ).execute(org_id=ser.validated_data["org_id"])
+
+        publish_audit(
+            request=request,
+            user_id=_UUID(str(request.user.id)),
+            event_type="subscription.cancelled",
+            metadata={
+                "org_id": str(ser.validated_data["org_id"]),
+            },
+        )
+        return success_response(SubscriptionResponseSerializer(sub).data, request=request)
+
+
+class SubscriptionPaymentHistoryView(APIView):
+    """GET /subscriptions/<uuid>/payments/ - billing history for a subscription."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Subscriptions"],
+        summary="Subscription payment history",
+        responses={200: OpenApiResponse(description="Payment records.")},
+    )
+    def get(self, request: Request, subscription_id: uuid.UUID) -> Response:
+        """Return all payment records for a subscription."""
+        from apps.payments.infrastructure.repositories import DjangoSubscriptionPaymentRepository
+
+        payments = DjangoSubscriptionPaymentRepository().list_by_subscription(subscription_id)
+        return success_response(
+            SubscriptionPaymentResponseSerializer(payments, many=True).data,
+            request=request,
+        )
+
+
+class PromoCodeListCreateView(APIView):
+    """GET /promo-codes/ - list; POST /promo-codes/ - create."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Promo Codes"],
+        summary="List promo codes",
+        responses={200: PromoCodeResponseSerializer(many=True)},
+    )
+    def get(self, request: Request) -> Response:
+        """Return all promo codes."""
+        promos = _LIST_PROMOS_UC(_PROMO_REPO()).execute()
+        return success_response(PromoCodeResponseSerializer(promos, many=True).data, request=request)
+
+    @extend_schema(
+        tags=["Promo Codes"],
+        summary="Create promo code",
+        request=CreatePromoCodeSerializer,
+        responses={201: PromoCodeResponseSerializer},
+    )
+    def post(self, request: Request) -> Response:
+        """Create a new promo code."""
+        ser = CreatePromoCodeSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+        promo = _CREATE_PROMO_UC(_PROMO_REPO()).execute(
+            code=d["code"],
+            discount_type=d["discount_type"],
+            discount_value=d["discount_value"],
+            valid_from=d["valid_from"],
+            valid_until=d["valid_until"],
+            max_usage_count=d.get("max_usage_count", 0),
+        )
+        publish_audit(
+            request=request,
+            user_id=_UUID(str(request.user.id)),
+            event_type="promo.created",
+            metadata={
+                "code": d["code"],
+            },
+        )
+        return _CREATED(PromoCodeResponseSerializer(promo).data, request=request)
+
+
+class ValidatePromoCodeView(APIView):
+    """GET /promo-codes/{code}/validate/ - validate a single promo code."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Promo Codes"],
+        summary="Validate promo code",
+        responses={
+            200: PromoCodeResponseSerializer,
+            422: OpenApiResponse(description="Code invalid, expired, or exhausted."),
+        },
+    )
+    def get(self, request: Request, code: str) -> Response:
+        """Return promo details if valid, or 422 if not."""
+        try:
+            promo = _VALIDATE_PROMO_UC(_PROMO_REPO()).execute(code=code)
+        except InvalidPromoCodeError as exc:
+            return error_response(
+                code="ERR_PAYMENT_INVALID_PROMO",
+                message=str(exc),
+                http_status=422,
+                request=request,
+            )
+        return success_response(PromoCodeResponseSerializer(promo).data, request=request)
+
+
+class DisputeListCreateView(APIView):
+    """GET/POST /orders/{order_id}/disputes/ - list or open a dispute."""
+
+    # * org admin required for both listing and creating disputes
+    permission_classes = [IsOrgAdmin]
+
+    @extend_schema(
+        tags=["Disputes"],
+        summary="List disputes for an order",
+        responses={200: DisputeResponseSerializer(many=True)},
+    )
+    def get(self, request: Request, order_id: uuid.UUID) -> Response:
+        """Return all disputes filed by this user for the given order."""
+        disputes = _LIST_DISPUTES_UC(_DISPUTE_REPO()).execute(
+            order_id=order_id,
+            user_id=_UUID(str(request.user.id)),
+        )
+        return success_response(DisputeResponseSerializer(disputes, many=True).data, request=request)
+
+    @extend_schema(
+        tags=["Disputes"],
+        summary="Open a dispute",
+        request=CreateDisputeSerializer,
+        responses={
+            201: DisputeResponseSerializer,
+            404: OpenApiResponse(description="Order not found."),
+        },
+    )
+    def post(self, request: Request, order_id: uuid.UUID) -> Response:
+        """Open a new dispute against the given order."""
+        ser = CreateDisputeSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+        dispute = _CREATE_DISPUTE_UC(_ORDER_REPO(), _DISPUTE_REPO()).execute(
+            order_id=order_id,
+            user_id=_UUID(str(request.user.id)),
+            reason=d["reason"],
+            description=d["description"],
+            evidence=d.get("evidence", {}),
+        )
+        publish_audit(
+            request=request,
+            user_id=_UUID(str(request.user.id)),
+            event_type="dispute.created",
+            metadata={
+                "reason": d["reason"],
+            },
+        )
+        return _CREATED(DisputeResponseSerializer(dispute).data, request=request)
+
+
+class DisputeDetailView(APIView):
+    """PATCH /disputes/{dispute_id}/ - advance dispute lifecycle (admin)."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Disputes"],
+        summary="Update dispute status",
+        request=UpdateDisputeStatusSerializer,
+        responses={
+            200: DisputeResponseSerializer,
+            404: OpenApiResponse(description="Dispute not found."),
+        },
+    )
+    def patch(self, request: Request, dispute_id: uuid.UUID) -> Response:
+        """Update the status of a dispute (admin action)."""
+        ser = UpdateDisputeStatusSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+        try:
+            dispute = _UPDATE_DISPUTE_UC(_DISPUTE_REPO()).execute(
+                dispute_id=dispute_id,
+                new_status=d["status"],
+                resolution_notes=d.get("resolution_notes", ""),
+            )
+        except DisputeNotFoundError as exc:
+            return error_response(code=exc.code, message=str(exc), http_status=404, request=request)
+        publish_audit(
+            request=request,
+            user_id=_UUID(str(request.user.id)),
+            event_type="dispute.updated",
+            metadata={
+                "status": d["status"],
+            },
+        )
+        return success_response(DisputeResponseSerializer(dispute).data, request=request)
+
+
+class DisputeListAllView(APIView):
+    """GET /disputes/ - list all disputes platform-wide (admin)."""
+
+    permission_classes = [IsSuperAdminFromAllowedIP]
+
+    @extend_schema(
+        tags=["Disputes"],
+        summary="List all disputes (admin)",
+        responses={200: DisputeResponseSerializer(many=True)},
+    )
+    def get(self, request: Request) -> Response:
+        """Return every dispute across all orders, newest first."""
+        disputes = _DISPUTE_REPO().list_all()
+        return success_response(DisputeResponseSerializer(disputes, many=True).data, request=request)
+
+
+class AdminOrderListView(APIView):
+    """GET /admin/orders/ - list all platform orders (superadmin only)."""
+
+    permission_classes = [IsSuperAdminFromAllowedIP]
+
+    @extend_schema(
+        tags=["Admin"],
+        summary="List all orders (admin)",
+        description="Returns every payment order across all users, newest first. Requires superadmin access.",
+        responses={
+            200: OpenApiResponse(description="All platform orders.", response=_ORDER_RESP_SER(many=True)),
+            401: OpenApiResponse(description="Missing or invalid JWT."),
+            403: OpenApiResponse(description="Not a superadmin or IP not allowed."),
+        },
+    )
+    def get(self, request: Request) -> Response:
+        """Return every order across all users, not scoped to the requester."""
+        results = _ORDER_REPO().list_all()
+        return success_response(_ORDER_RESP_SER(results, many=True).data, request=request)
+
+
+class AdminPaymentAnalyticsView(APIView):
+    """GET /admin/analytics/ - platform-wide payment analytics (superadmin only)."""
+
+    permission_classes = [IsSuperAdminFromAllowedIP]
+
+    @extend_schema(
+        tags=["Admin"],
+        summary="Payment analytics (admin)",
+        responses={200: OpenApiResponse(description="Platform payment analytics.")},
+    )
+    def get(self, request: Request) -> Response:
+        """Aggregate payment metrics across the entire platform."""
+        from datetime import timedelta
+
+        from django.db.models import Count, Sum
+        from django.utils import timezone as dj_tz
+
+        from apps.payments.infrastructure.models import PaymentOrder, Refund, Subscription, SubscriptionPayment
+
+        now = dj_tz.now()
+        thirty_days_ago = now - timedelta(days=30)
+
+        # ticket order revenue
+        orders = PaymentOrder.objects.all()
+        completed = orders.filter(status="completed")
+        completed_30d = completed.filter(completed_at__gte=thirty_days_ago)
+
+        ticket_revenue = completed.aggregate(s=Sum("total_amount"))["s"] or 0
+        ticket_revenue_30d = completed_30d.aggregate(s=Sum("total_amount"))["s"] or 0
+        platform_fees = completed.aggregate(s=Sum("platform_fee"))["s"] or 0
+        platform_fees_30d = completed_30d.aggregate(s=Sum("platform_fee"))["s"] or 0
+
+        # subscription revenue
+        active_subs = Subscription.objects.filter(status="active")
+        active_sub_count = active_subs.count()
+        total_subs = Subscription.objects.count()
+        sub_mrr = active_subs.aggregate(s=Sum("amount"))["s"] or 0
+
+        sub_payments = SubscriptionPayment.objects.filter(status="completed")
+        sub_revenue = sub_payments.aggregate(s=Sum("amount"))["s"] or 0
+        sub_revenue_30d = sub_payments.filter(paid_at__gte=thirty_days_ago).aggregate(s=Sum("amount"))["s"] or 0
+
+        # combined revenue = ticket revenue + subscription revenue
+        total_revenue = float(ticket_revenue) + float(sub_revenue) + float(sub_mrr)
+        revenue_30d = float(ticket_revenue_30d) + float(sub_revenue_30d)
+
+        gateway_breakdown = list(completed.values("gateway").annotate(count=Count("id"), total=Sum("total_amount")).order_by("-total"))
+
+        status_breakdown = list(orders.values("status").annotate(count=Count("id")).order_by("-count"))
+
+        refund_count = Refund.objects.count()
+        refund_total = Refund.objects.filter(status="completed").aggregate(s=Sum("amount"))["s"] or 0
+
+        return success_response(
+            {
+                "total_revenue": str(total_revenue),
+                "revenue_30d": str(revenue_30d),
+                "ticket_revenue": str(ticket_revenue),
+                "subscription_revenue": str(float(sub_revenue) + float(sub_mrr)),
+                "subscription_mrr": str(sub_mrr),
+                "platform_fees_total": str(platform_fees),
+                "platform_fees_30d": str(platform_fees_30d),
+                "total_orders": orders.count(),
+                "completed_orders": completed.count(),
+                "failed_orders": orders.filter(status="failed").count(),
+                "gateway_breakdown": [{"gateway": g["gateway"], "count": g["count"], "total": str(g["total"])} for g in gateway_breakdown],
+                "status_breakdown": [{"status": s["status"], "count": s["count"]} for s in status_breakdown],
+                "active_subscriptions": active_sub_count,
+                "total_subscriptions": total_subs,
+                "refund_count": refund_count,
+                "refund_total": str(refund_total),
+            },
+            request=request,
+        )
+
+
+class OrgRevenueAnalyticsView(APIView):
+    """GET /org/analytics/?organization_id=<uuid> - revenue analytics scoped to one org."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Analytics"],
+        summary="Org revenue analytics",
+        description=("Aggregates payment metrics for a single organisation. Pass the org UUID via ?organization_id=<uuid>."),
+        responses={
+            200: OpenApiResponse(
+                description="Org revenue analytics.",
+                response=inline_serializer(
+                    name="OrgRevenueAnalyticsResponse",
+                    fields={
+                        "data": inline_serializer(
+                            name="OrgRevenueAnalyticsData",
+                            fields={
+                                "gross_revenue": serializers.CharField(),
+                                "net_revenue": serializers.CharField(),
+                                "refund_total": serializers.CharField(),
+                                "refund_count": serializers.IntegerField(),
+                                "orders_count": serializers.IntegerField(),
+                                "orders_30d": serializers.IntegerField(),
+                                "gateway_breakdown": serializers.ListField(),
+                            },
+                        ),
+                        "error": serializers.JSONField(allow_null=True),
+                        "meta": _META_SCHEMA,
+                    },
+                ),
+            ),
+            400: OpenApiResponse(description="organization_id query param is required."),
+        },
+    )
+    def get(self, request: Request) -> Response:
+        """Return revenue aggregates for the given organisation."""
+        from datetime import timedelta
+
+        from django.db.models import Count, Sum
+        from django.utils import timezone as dj_tz
+
+        from apps.payments.infrastructure.models import PaymentOrder, Refund
+
+        org_id_param = request.query_params.get("organization_id", "")
+        if not org_id_param:
+            return error_response(
+                code="ERR_PAYMENT_MISSING_ORG_ID",
+                message="organization_id query parameter is required.",
+                http_status=400,
+                request=request,
+            )
+
+        try:
+            org_uuid = _UUID(org_id_param)
+        except ValueError:
+            return error_response(
+                code="ERR_PAYMENT_INVALID_ORG_ID",
+                message="organization_id must be a valid UUID.",
+                http_status=400,
+                request=request,
+            )
+
+        now = dj_tz.now()
+        thirty_days_ago = now - timedelta(days=30)
+
+        # * filter all orders by org and completed status
+        org_orders = PaymentOrder.objects.filter(organization_id=org_uuid)
+        completed = org_orders.filter(status="completed")
+
+        gross_revenue = completed.aggregate(s=Sum("total_amount"))["s"] or 0
+
+        # * refunds attached to orders belonging to this org
+        org_refunds = Refund.objects.filter(
+            order__organization_id=org_uuid,
+            status="completed",
+        )
+        refund_total = org_refunds.aggregate(s=Sum("amount"))["s"] or 0
+        refund_count = org_refunds.count()
+
+        net_revenue = float(gross_revenue) - float(refund_total)
+
+        orders_30d = org_orders.filter(created_at__gte=thirty_days_ago).count()
+
+        gateway_breakdown = list(completed.values("gateway").annotate(count=Count("id"), total=Sum("total_amount")).order_by("-total"))
+
+        return success_response(
+            {
+                "gross_revenue": str(gross_revenue),
+                "net_revenue": str(net_revenue),
+                "refund_total": str(refund_total),
+                "refund_count": refund_count,
+                "orders_count": org_orders.count(),
+                "orders_30d": orders_30d,
+                "gateway_breakdown": [{"gateway": g["gateway"], "count": g["count"], "total": str(g["total"])} for g in gateway_breakdown],
+            },
+            request=request,
+        )
+
+
+class AdminRefundListView(APIView):
+    """GET /admin/refunds/ - list all refunds (superadmin only)."""
+
+    permission_classes = [IsSuperAdminFromAllowedIP]
+
+    @extend_schema(
+        tags=["Admin"],
+        summary="List all refunds (admin)",
+        responses={200: OpenApiResponse(description="All platform refunds.")},
+    )
+    def get(self, request: Request) -> Response:
+        """Return all refund records across the platform."""
+        from apps.payments.infrastructure.models import Refund
+
+        refunds = Refund.objects.all().order_by("-created_at")[:100]
+        data = [
+            {
+                "id": str(r.id),
+                "order_id": str(r.order_id),
+                "amount": str(r.amount) if r.amount else None,
+                "reason": r.reason,
+                "status": r.status,
+                "gateway": r.gateway,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in refunds
+        ]
+        return success_response(data, request=request)
+
+
+class ConnectedAccountView(APIView):
+    """POST /connect/accounts/ - register a Stripe Connect account for an org."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Stripe Connect"],
+        summary="Register Stripe Connect account",
+        description="Creates a Stripe Express account for the org and returns an onboarding URL.",
+        responses={
+            201: OpenApiResponse(description="Account created."),
+            502: OpenApiResponse(description="Stripe error."),
+        },
+    )
+    def post(self, request: Request) -> Response:
+        """Create a Stripe Connect account and return the onboarding URL."""
+        from rest_framework import serializers as drf_serializers
+
+        from apps.payments.infrastructure.gateways.stripe_connect import StripeConnectGateway
+
+        class ConnectSerializer(drf_serializers.Serializer):
+            org_id = drf_serializers.UUIDField()
+            return_url = drf_serializers.URLField()
+            refresh_url = drf_serializers.URLField()
+
+        ser = ConnectSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+
+        entity = CreateConnectedAccountUseCase(DjangoConnectedAccountRepository(), StripeConnectGateway()).execute(
+            org_id=d["org_id"],
+            return_url=d["return_url"],
+            refresh_url=d["refresh_url"],
+        )
+        return created_response(
+            {
+                "id": str(entity.id),
+                "org_id": str(entity.org_id),
+                "stripe_account_id": entity.stripe_account_id,
+                "onboarding_url": entity.onboarding_url,
+            },
+            request=request,
+        )
+
+
+class PayoutCreateView(APIView):
+    """POST /connect/payouts/ - transfer proceeds to a connected Stripe account."""
+
+    # * only org owners can trigger payouts
+    permission_classes = [IsOrgOwner]
+
+    @extend_schema(
+        tags=["Stripe Connect"],
+        summary="Create payout",
+        description="Transfer funds to the org's connected Stripe account.",
+        responses={
+            201: OpenApiResponse(description="Payout created."),
+            404: OpenApiResponse(description="No connected account found."),
+            502: OpenApiResponse(description="Stripe transfer failed."),
+        },
+    )
+    def post(self, request: Request) -> Response:
+        """Validate payload and trigger the Stripe transfer."""
+        from decimal import Decimal
+
+        from rest_framework import serializers as drf_serializers
+
+        from apps.payments.infrastructure.gateways.stripe_connect import StripeConnectGateway
+
+        class PayoutSerializer(drf_serializers.Serializer):
+            org_id = drf_serializers.UUIDField()
+            amount = drf_serializers.DecimalField(max_digits=12, decimal_places=2)
+            currency = drf_serializers.CharField(max_length=10, default="USD")
+            description = drf_serializers.CharField(max_length=500, default="")
+
+        ser = PayoutSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        d = ser.validated_data
+
+        entity = CreatePayoutUseCase(
+            DjangoConnectedAccountRepository(),
+            DjangoPayoutRepository(),
+            StripeConnectGateway(),
+        ).execute(
+            org_id=d["org_id"],
+            amount=Decimal(str(d["amount"])),
+            currency=d["currency"],
+            description=d["description"],
+        )
+        return created_response(
+            {
+                "id": str(entity.id),
+                "org_id": str(entity.org_id),
+                "stripe_transfer_id": entity.stripe_transfer_id,
+                "amount": str(entity.amount),
+                "currency": entity.currency,
+            },
             request=request,
         )

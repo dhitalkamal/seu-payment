@@ -1,4 +1,5 @@
 """Django app config for the payments module."""
+
 from __future__ import annotations
 
 from django.apps import AppConfig
