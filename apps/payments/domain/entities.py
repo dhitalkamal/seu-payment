@@ -33,6 +33,8 @@ class PaymentOrderEntity:
     # * stored on creation so notification-service can email the buyer on completion
     customer_email: str = ""
     customer_first_name: str = ""
+    # * org that owns the event, used for scoped revenue analytics
+    organization_id: uuid.UUID | None = None
 
 
 @dataclass(slots=True)

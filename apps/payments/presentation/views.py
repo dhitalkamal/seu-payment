@@ -269,6 +269,7 @@ class CreateOrderView(APIView):
 
         gateway_client = get_gateway(gateway_name)
 
+        org_id_val: _UUID | None = d.get("organization_id")
         order, session = _CREATE_ORDER_UC(
             order_repo=_ORDER_REPO(),
             promo_repo=_PROMO_REPO(),
@@ -285,7 +286,8 @@ class CreateOrderView(APIView):
             customer_first_name=first_name,
             return_url=return_url,
             cancel_url=cancel_url,
-            org_plan=self._resolve_org_plan(d.get("organization_id")),
+            org_plan=self._resolve_org_plan(org_id_val),
+            organization_id=org_id_val,
         )
 
         resp_data = _ORDER_RESP_SER(order).data
@@ -315,9 +317,32 @@ class CreateOrderView(APIView):
 
 
 class RequestRefundView(APIView):
-    """Request a refund on a completed payment order."""
+    """List refunds (GET) or request a new refund (POST) for the authenticated user."""
 
     permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Refunds"],
+        summary="List my refunds",
+        description="Returns all refunds for the authenticated user, newest first. Optionally filter by ?status=pending|completed|failed.",
+        responses={
+            200: OpenApiResponse(description="User refunds.", response=_REFUND_RESP_SER(many=True)),
+            401: OpenApiResponse(description="Missing or invalid JWT."),
+        },
+    )
+    def get(self, request: Request) -> Response:
+        """Return all refunds belonging to the authenticated user, with optional status filter."""
+        from apps.payments.infrastructure.models import Refund as RefundModel
+
+        user_id = _UUID(str(request.user.id))
+        qs = RefundModel.objects.filter(order__user_id=user_id).order_by("-created_at")
+
+        status_filter = request.query_params.get("status", "")
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+
+        refunds = [r.to_entity() for r in qs]
+        return success_response(_REFUND_RESP_SER(refunds, many=True).data, request=request)
 
     @extend_schema(
         tags=["Refunds"],
@@ -1053,7 +1078,7 @@ class DisputeDetailView(APIView):
 class DisputeListAllView(APIView):
     """GET /disputes/ - list all disputes platform-wide (admin)."""
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsSuperAdminFromAllowedIP]
 
     @extend_schema(
         tags=["Disputes"],
@@ -1158,6 +1183,106 @@ class AdminPaymentAnalyticsView(APIView):
                 "total_subscriptions": total_subs,
                 "refund_count": refund_count,
                 "refund_total": str(refund_total),
+            },
+            request=request,
+        )
+
+
+class OrgRevenueAnalyticsView(APIView):
+    """GET /org/analytics/?organization_id=<uuid> - revenue analytics scoped to one org."""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Analytics"],
+        summary="Org revenue analytics",
+        description=("Aggregates payment metrics for a single organisation. Pass the org UUID via ?organization_id=<uuid>."),
+        responses={
+            200: OpenApiResponse(
+                description="Org revenue analytics.",
+                response=inline_serializer(
+                    name="OrgRevenueAnalyticsResponse",
+                    fields={
+                        "data": inline_serializer(
+                            name="OrgRevenueAnalyticsData",
+                            fields={
+                                "gross_revenue": serializers.CharField(),
+                                "net_revenue": serializers.CharField(),
+                                "refund_total": serializers.CharField(),
+                                "refund_count": serializers.IntegerField(),
+                                "orders_count": serializers.IntegerField(),
+                                "orders_30d": serializers.IntegerField(),
+                                "gateway_breakdown": serializers.ListField(),
+                            },
+                        ),
+                        "error": serializers.JSONField(allow_null=True),
+                        "meta": _META_SCHEMA,
+                    },
+                ),
+            ),
+            400: OpenApiResponse(description="organization_id query param is required."),
+        },
+    )
+    def get(self, request: Request) -> Response:
+        """Return revenue aggregates for the given organisation."""
+        from datetime import timedelta
+
+        from django.db.models import Count, Sum
+        from django.utils import timezone as dj_tz
+
+        from apps.payments.infrastructure.models import PaymentOrder, Refund
+
+        org_id_param = request.query_params.get("organization_id", "")
+        if not org_id_param:
+            return error_response(
+                code="ERR_PAYMENT_MISSING_ORG_ID",
+                message="organization_id query parameter is required.",
+                http_status=400,
+                request=request,
+            )
+
+        try:
+            org_uuid = _UUID(org_id_param)
+        except ValueError:
+            return error_response(
+                code="ERR_PAYMENT_INVALID_ORG_ID",
+                message="organization_id must be a valid UUID.",
+                http_status=400,
+                request=request,
+            )
+
+        now = dj_tz.now()
+        thirty_days_ago = now - timedelta(days=30)
+
+        # * filter all orders by org and completed status
+        org_orders = PaymentOrder.objects.filter(organization_id=org_uuid)
+        completed = org_orders.filter(status="completed")
+
+        gross_revenue = completed.aggregate(s=Sum("total_amount"))["s"] or 0
+
+        # * refunds attached to orders belonging to this org
+        org_refunds = Refund.objects.filter(
+            order__organization_id=org_uuid,
+            status="completed",
+        )
+        refund_total = org_refunds.aggregate(s=Sum("amount"))["s"] or 0
+        refund_count = org_refunds.count()
+
+        net_revenue = float(gross_revenue) - float(refund_total)
+
+        orders_30d = org_orders.filter(created_at__gte=thirty_days_ago).count()
+
+        gateway_breakdown = list(completed.values("gateway").annotate(count=Count("id"), total=Sum("total_amount")).order_by("-total"))
+
+        return success_response(
+            {
+                "gross_revenue": str(gross_revenue),
+                "net_revenue": str(net_revenue),
+                "refund_total": str(refund_total),
+                "refund_count": refund_count,
+                "orders_count": org_orders.count(),
+                "orders_30d": orders_30d,
+                "gateway_breakdown": [{"gateway": g["gateway"], "count": g["count"], "total": str(g["total"])} for g in gateway_breakdown],
             },
             request=request,
         )

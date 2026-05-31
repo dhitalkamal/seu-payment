@@ -58,6 +58,8 @@ class PaymentOrder(models.Model):
     # * stored so notification-service has the buyer's email when the webhook fires
     customer_email = models.EmailField(blank=True, default="")
     customer_first_name = models.CharField(max_length=150, blank=True, default="")
+    # * org that owns the event; nullable for orders created before this field existed
+    organization_id = models.UUIDField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -84,6 +86,7 @@ class PaymentOrder(models.Model):
             completed_at=self.completed_at,
             customer_email=self.customer_email or "",
             customer_first_name=self.customer_first_name or "",
+            organization_id=self.organization_id,
         )
 
     @classmethod
@@ -108,6 +111,7 @@ class PaymentOrder(models.Model):
             completed_at=entity.completed_at,
             customer_email=entity.customer_email,
             customer_first_name=entity.customer_first_name,
+            organization_id=entity.organization_id,
         )
 
 

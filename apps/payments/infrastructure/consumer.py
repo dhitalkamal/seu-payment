@@ -17,7 +17,7 @@ _ROUTING_KEY = "participation.#"
 
 
 def _handle_registration_created(payload: dict) -> None:
-    """Log registration_created events — no action needed, order is created via API."""
+    """Log registration_created events - no action needed, order is created via API."""
     logger.info(
         "Received participation.registration.created for event_id=%s user_id=%s",
         payload.get("event_id"),
@@ -25,8 +25,55 @@ def _handle_registration_created(payload: dict) -> None:
     )
 
 
+def _handle_registration_cancelled(payload: dict) -> None:
+    """Flag the related order for manual refund review when a registration is cancelled."""
+    from apps.payments.infrastructure.models import PaymentOrder
+
+    order_id_str = payload.get("order_id")
+    user_id_str = payload.get("user_id")
+    event_id_str = payload.get("event_id")
+
+    if order_id_str:
+        try:
+            order = PaymentOrder.objects.get(pk=order_id_str)
+            if order.status == "completed":
+                order.status = "refund_pending"
+                order.save(update_fields=["status", "updated_at"])
+                logger.info("Order %s flagged for manual refund review.", order_id_str)
+            return
+        except PaymentOrder.DoesNotExist:
+            logger.warning("Order %s not found for refund flagging.", order_id_str)
+        except Exception:
+            logger.exception("Failed to flag order %s for refund.", order_id_str)
+        return
+
+    # fallback: find by user_id + event_id if no order_id provided
+    if user_id_str and event_id_str:
+        try:
+            found = (
+                PaymentOrder.objects.filter(
+                    user_id=user_id_str,
+                    event_id=event_id_str,
+                    status="completed",
+                )
+                .order_by("-created_at")
+                .first()
+            )
+            if found:
+                found.status = "refund_pending"
+                found.save(update_fields=["status", "updated_at"])
+                logger.info("Order %s flagged for manual refund review (lookup by user+event).", found.pk)
+            else:
+                logger.info("No completed order found for user %s event %s, skipping refund.", user_id_str, event_id_str)
+        except Exception:
+            logger.exception("Failed to flag order for refund. user=%s event=%s", user_id_str, event_id_str)
+    else:
+        logger.warning("participation.registration.cancelled missing order_id and user_id/event_id: %s", payload)
+
+
 _HANDLERS: dict = {
     "participation.registration.created": _handle_registration_created,
+    "participation.registration.cancelled": _handle_registration_cancelled,
 }
 
 
@@ -44,11 +91,11 @@ def _handle_message(
         if handler:
             handler(payload)
         else:
-            logger.debug("No handler for event %s — acking.", event_name)
-    except Exception:
-        logger.exception("Error processing event %s.", event_name)
-    finally:
+            logger.debug("No handler for event %s, acking.", event_name)
         channel.basic_ack(delivery_tag=method.delivery_tag)
+    except Exception:
+        logger.exception("Error processing event %s, sending to dead-letter.", event_name)
+        channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
 
 def start_consumer() -> None:
