@@ -107,10 +107,7 @@ class FakePaymentOrderRepository(IPaymentOrderRepository):
 
     def has_active_order_for_event(self, user_id: uuid.UUID, event_id: uuid.UUID) -> bool:
         """True if user has a non-failed order for this event."""
-        return any(
-            o.user_id == user_id and o.event_id == event_id and o.status not in ("failed", "refunded")
-            for o in self._store.values()
-        )
+        return any(o.user_id == user_id and o.event_id == event_id and o.status not in ("failed", "refunded") for o in self._store.values())
 
     def update(self, entity: PaymentOrderEntity) -> PaymentOrderEntity:
         """Overwrite the stored entity and return it."""

@@ -52,6 +52,7 @@ class CreatePaymentOrderUseCase:
         cancel_url: str = "",
         description: str = "Sansaar event registration",
         org_plan: str = "free",
+        organization_id: uuid.UUID | None = None,
     ) -> tuple[PaymentOrderEntity, PaymentSession | None]:
         """
         Calculate fees, apply promo, persist order, call gateway, store gateway_order_id.
@@ -63,12 +64,13 @@ class CreatePaymentOrderUseCase:
         @param gateway - khalti | esewa | stripe | paypal
         @param idempotency_key - re-submitting the same key returns the existing order
         @param promo_code - optional case-insensitive promo code
-        @param customer_email      - buyer email from JWT (passed to gateway and stored)
+        @param customer_email - buyer email from JWT (passed to gateway and stored)
         @param customer_first_name - buyer first name from JWT (stored for notification payloads)
-        @param return_url          - where the gateway redirects on success
-        @param cancel_url          - where the gateway redirects on failure/cancel
-        @param description         - label shown on the gateway payment page
-        @param org_plan            - the organizer's plan (determines platform fee rate)
+        @param return_url - where the gateway redirects on success
+        @param cancel_url - where the gateway redirects on failure/cancel
+        @param description - label shown on the gateway payment page
+        @param org_plan - the organizer's plan (determines platform fee rate)
+        @param organization_id - UUID of the org that owns the event; stored for analytics scoping
         @returns tuple of (order, payment_session); session is None for idempotent re-fetches
         @raises OrderAlreadyExistsError if another order exists for this registration
         @raises InvalidPromoCodeError if the promo is invalid
@@ -120,6 +122,7 @@ class CreatePaymentOrderUseCase:
             updated_at=now,
             customer_email=customer_email,
             customer_first_name=customer_first_name,
+            organization_id=organization_id,
         )
         result = self._orders.create(order)
 
